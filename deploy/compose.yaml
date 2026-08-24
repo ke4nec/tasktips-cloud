@@ -1,0 +1,129 @@
+name: tasktips-cloud
+
+x-tasktips-environment: &tasktips-environment
+  TASKTIPS_BIND_ADDRESS: ${TASKTIPS_BIND_ADDRESS:-0.0.0.0:8080}
+  TASKTIPS_DATABASE_URL: ${TASKTIPS_DATABASE_URL:?TASKTIPS_DATABASE_URL is required}
+  RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-http://rustfs:9000}
+  RUSTFS_REGION: ${RUSTFS_REGION:-us-east-1}
+  RUSTFS_BUCKET: ${RUSTFS_BUCKET:-tasktips-data}
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+  TASKTIPS_JWT_ISSUER: ${TASKTIPS_JWT_ISSUER:-tasktips-cloud}
+  TASKTIPS_JWT_AUDIENCE: ${TASKTIPS_JWT_AUDIENCE:-tasktips-desktop}
+  TASKTIPS_JWT_PRIVATE_KEY_FILE: ${TASKTIPS_JWT_PRIVATE_KEY_FILE:-/run/secrets/tasktips_jwt_private_key}
+  TASKTIPS_ACCESS_TOKEN_TTL_SECONDS: ${TASKTIPS_ACCESS_TOKEN_TTL_SECONDS:-900}
+  TASKTIPS_REFRESH_TOKEN_TTL_SECONDS: ${TASKTIPS_REFRESH_TOKEN_TTL_SECONDS:-2592000}
+  TASKTIPS_MAX_PUSH_OBJECTS: ${TASKTIPS_MAX_PUSH_OBJECTS:-100}
+  TASKTIPS_MAX_PUSH_JSON_BYTES: ${TASKTIPS_MAX_PUSH_JSON_BYTES:-2097152}
+  RUST_LOG: ${RUST_LOG:-info}
+
+services:
+  postgres:
+    image: postgres:18.6-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:-tasktips}
+      POSTGRES_USER: ${POSTGRES_USER:-tasktips}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    restart: unless-stopped
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0-rc.3
+    environment:
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: 'false'
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:9000/health]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - rustfs-data:/data
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: [tasktips-api, migrate]
+    environment: *tasktips-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+    restart: 'no'
+
+  tasktips-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment: *tasktips-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:8080/health/live]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  tasktips-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: [tasktips-worker]
+    environment: *tasktips-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  tasktips-admin:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.admin
+    healthcheck:
+      test:
+        [CMD, wget, --quiet, --tries=1, --spider, http://localhost:8080/health]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      tasktips-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    environment:
+      TASKTIPS_PUBLIC_BASE_URL: ${TASKTIPS_PUBLIC_BASE_URL:-http://localhost}
+    ports:
+      - 80:80
+      - 443:443
+      - 443:443/udp
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      tasktips-api:
+        condition: service_healthy
+      tasktips-admin:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  rustfs-data:
+  caddy-data:
+  caddy-config:

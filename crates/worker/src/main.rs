@@ -1,0 +1,16 @@
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .json()
+        .init();
+
+    info!("tasktips worker started");
+    tokio::signal::ctrl_c().await?;
+    info!("tasktips worker stopped");
+    Ok(())
+}

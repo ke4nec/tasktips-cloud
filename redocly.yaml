@@ -1,0 +1,8 @@
+extends:
+  - recommended
+
+rules:
+  # Health endpoints are not user-facing business operations.
+  operation-4xx-response: off
+  # Shared error schemas are defined before the first business endpoint lands.
+  no-unused-components: off

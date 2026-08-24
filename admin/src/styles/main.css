@@ -1,0 +1,149 @@
+:root {
+  color: #1f2328;
+  background: #f6f7f9;
+  font-family:
+    Inter,
+    'Segoe UI',
+    'Microsoft YaHei',
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: #f6f7f9;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 20px;
+  color: #ffffff;
+  background: #20242a;
+  border-bottom: 1px solid #363b42;
+}
+
+.topbar strong {
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.workspace {
+  min-height: calc(100vh - 56px);
+}
+
+.sidebar {
+  background: #ffffff;
+  border-right: 1px solid #e1e4e8;
+}
+
+.sidebar .el-menu {
+  border-right: 0;
+}
+
+.main-content {
+  min-width: 0;
+  padding: 24px;
+}
+
+.empty-section {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.empty-section header {
+  padding-bottom: 18px;
+  border-bottom: 1px solid #dfe3e8;
+}
+
+.empty-section h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.empty-section p {
+  margin: 8px 0 0;
+  color: #616871;
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e6e8eb;
+    background: #15171a;
+  }
+
+  .app-shell {
+    background: #15171a;
+  }
+
+  .topbar {
+    background: #111315;
+    border-bottom-color: #30343a;
+  }
+
+  .sidebar {
+    background: #1d2024;
+    border-right-color: #30343a;
+  }
+
+  .sidebar .el-menu {
+    --el-menu-bg-color: #1d2024;
+    --el-menu-text-color: #c9cdd2;
+    --el-menu-hover-bg-color: #292d32;
+  }
+
+  .empty-section header {
+    border-bottom-color: #30343a;
+  }
+
+  .empty-section p {
+    color: #a5abb3;
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace {
+    display: block;
+  }
+
+  .sidebar {
+    width: 100% !important;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid #e1e4e8;
+  }
+
+  .sidebar .el-menu {
+    display: flex;
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .main-content {
+    padding: 18px 16px;
+  }
+}

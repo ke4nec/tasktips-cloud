@@ -1,0 +1,69 @@
+<script setup lang="ts">
+import {
+  Connection,
+  DataAnalysis,
+  Files,
+  Monitor,
+  Tickets,
+  User,
+} from '@element-plus/icons-vue';
+import { storeToRefs } from 'pinia';
+import { onMounted } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { useRoute } from 'vue-router';
+
+import { healthLabelKey, useHealthStore } from '@/stores/health';
+
+const route = useRoute();
+const { t } = useI18n();
+const health = useHealthStore();
+const { state, isLive } = storeToRefs(health);
+
+onMounted(() => health.check());
+</script>
+
+<template>
+  <el-container class="app-shell">
+    <el-header class="topbar">
+      <strong>{{ t('app.name') }}</strong>
+      <el-tag :type="isLive ? 'success' : 'info'" effect="plain" size="small">
+        {{ t(healthLabelKey(state)) }}
+      </el-tag>
+    </el-header>
+
+    <el-container class="workspace">
+      <el-aside class="sidebar" width="208px">
+        <el-menu :default-active="route.path" router>
+          <el-menu-item index="/">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>{{ t('navigation.overview') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/users">
+            <el-icon><User /></el-icon>
+            <span>{{ t('navigation.users') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/projects">
+            <el-icon><Files /></el-icon>
+            <span>{{ t('navigation.projects') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/devices">
+            <el-icon><Monitor /></el-icon>
+            <span>{{ t('navigation.devices') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/sync-attempts">
+            <el-icon><Connection /></el-icon>
+            <span>{{ t('navigation.sync') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/audit">
+            <el-icon><Tickets /></el-icon>
+            <span>{{ t('navigation.audit') }}</span>
+          </el-menu-item>
+        </el-menu>
+      </el-aside>
+
+      <el-main class="main-content">
+        <router-view />
+      </el-main>
+    </el-container>
+  </el-container>
+</template>

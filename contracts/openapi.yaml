@@ -1,0 +1,89 @@
+openapi: 3.1.0
+info:
+  title: TaskTips Cloud API
+  version: 0.1.0
+  description: Contract-first API for TaskTips synchronization and administration.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-TaskTips-Proprietary
+servers:
+  - url: /
+tags:
+  - name: System
+    description: Process health and internal observability endpoints.
+paths:
+  /health/live:
+    get:
+      operationId: getLiveness
+      summary: Check whether the API process can respond
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: The API process is live.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /health/ready:
+    get:
+      operationId: getReadiness
+      summary: Check required service dependencies
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: PostgreSQL and RustFS are ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: At least one required dependency is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: Export internal Prometheus metrics
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: OpenMetrics text. This endpoint is internal-only in deployment.
+          content:
+            application/openmetrics-text:
+              schema:
+                type: string
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, database, objectStore]
+      properties:
+        status:
+          type: string
+          enum: [live, ready, notReady]
+        database:
+          type: [boolean, 'null']
+        objectStore:
+          type: [boolean, 'null']
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [code, message, retryable, requestId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+        requestId:
+          type: string
+        details:
+          type: object
+          additionalProperties: true

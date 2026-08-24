@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  admin-and-contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - name: Verify generated client is committed
+        working-directory: .
+        run: git diff --exit-code -- admin/src/api/generated/schema.ts
+
+  migration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-bookworm
+        env:
+          POSTGRES_DB: tasktips
+          POSTGRES_USER: tasktips
+          POSTGRES_PASSWORD: tasktips-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tasktips -d tasktips"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TASKTIPS_DATABASE_URL: postgres://tasktips:tasktips-test@localhost:5432/tasktips
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --locked --package tasktips-api -- migrate
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate Compose configuration
+        run: cp deploy/env.example deploy/.env && docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
+      - run: docker build --file deploy/Dockerfile --tag tasktips-cloud:test .
+      - run: docker build --file deploy/Dockerfile.admin --tag tasktips-admin:test .

@@ -1,0 +1,11 @@
+{
+  "code": "REVISION_CONFLICT",
+  "message": "对象已被其他设备更新",
+  "retryable": false,
+  "requestId": "01K3D4QZV7FCJKYAZ2M2XX9NC6",
+  "details": {
+    "expectedRevision": 4,
+    "actualRevision": 5
+  }
+}
+

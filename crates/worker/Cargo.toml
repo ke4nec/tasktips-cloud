@@ -1,0 +1,18 @@
+[package]
+name = "tasktips-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tasktips-application = { path = "../application" }
+tasktips-object-store = { path = "../object-store" }
+tasktips-persistence = { path = "../persistence" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
+

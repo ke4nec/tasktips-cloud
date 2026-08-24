@@ -1,0 +1,22 @@
+{$TASKTIPS_PUBLIC_BASE_URL} {
+  encode zstd gzip
+
+  redir /admin /admin/ 308
+
+  handle_path /admin/* {
+    reverse_proxy tasktips-admin:8080
+  }
+
+  handle /api/* {
+    reverse_proxy tasktips-api:8080
+  }
+
+  handle /health/* {
+    reverse_proxy tasktips-api:8080
+  }
+
+  handle {
+    respond "Not Found" 404
+  }
+}
+
