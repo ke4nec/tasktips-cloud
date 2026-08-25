@@ -457,6 +457,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/PayloadNotFound'
+        '416':
+          $ref: '#/components/responses/InvalidRequest'
         '423':
           $ref: '#/components/responses/ProjectMaintenance'
         '503':
@@ -1300,6 +1302,7 @@ components:
         - REVISION_CONFLICT
         - CONTENT_HASH_MISMATCH
         - PAYLOAD_NOT_FOUND
+        - PAYLOAD_TOO_LARGE
         - CURSOR_INVALID
         - IDEMPOTENCY_CONFLICT
         - RATE_LIMITED
@@ -1322,6 +1325,16 @@ components:
         actualGeneration:
           type: integer
           minimum: 1
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        maxBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        actualBytes:
+          type: integer
+          format: int64
+          minimum: 0
     ObjectKind:
       type: string
       enum: [todo, classification, index, image]
@@ -1535,7 +1548,7 @@ components:
     HistoryResponse:
       type: object
       additionalProperties: false
-      required: [items, hasMore, nextSequence]
+      required: [items, hasMore]
       properties:
         items:
           type: array
@@ -1544,7 +1557,7 @@ components:
         hasMore:
           type: boolean
         nextSequence:
-          type: integer
+          type: [integer, 'null']
           minimum: 0
     Snapshot:
       type: object
@@ -1722,6 +1735,10 @@ components:
           type: string
         code:
           $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+        details:
+          $ref: '#/components/schemas/ErrorDetails'
     LoginRequest:
       type: object
       additionalProperties: false
@@ -2024,7 +2041,7 @@ components:
     AdminHistoryItem:
       type: object
       additionalProperties: false
-      required: [kind, objectId, revision, changedAt, deviceId, tombstone, changeSequence]
+      required: [kind, objectId, revision, baseRevision, changedAt, deviceId, tombstone, changeSequence]
       properties:
         kind:
           $ref: '#/components/schemas/ObjectKind'
@@ -2032,6 +2049,9 @@ components:
           type: string
         revision:
           type: integer
+          minimum: 1
+        baseRevision:
+          type: [integer, 'null']
           minimum: 1
         changedAt:
           type: string
@@ -2047,7 +2067,7 @@ components:
     AdminHistoryResponse:
       type: object
       additionalProperties: false
-      required: [items, hasMore, nextSequence]
+      required: [items, hasMore]
       properties:
         items:
           type: array
@@ -2056,7 +2076,7 @@ components:
         hasMore:
           type: boolean
         nextSequence:
-          type: integer
+          type: [integer, 'null']
           minimum: 0
     RestoreJobList:
       type: object

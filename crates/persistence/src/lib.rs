@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{FromRow, PgPool, Postgres, Transaction, pool::PoolConnection};
 use std::collections::HashSet;
 use tasktips_domain::{AccountStatus, ObjectKind, UserRole};
 use time::{Duration, OffsetDateTime};
@@ -179,6 +179,9 @@ pub enum PushItemResult {
         kind: ObjectKind,
         id: String,
         code: &'static str,
+        message: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<serde_json::Value>,
     },
 }
 
@@ -236,6 +239,9 @@ pub struct RestoreJobRecord {
     pub created_at: OffsetDateTime,
     pub started_at: Option<OffsetDateTime>,
     pub finished_at: Option<OffsetDateTime>,
+    #[sqlx(default)]
+    #[serde(skip_serializing)]
+    pub lease_token: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -244,6 +250,7 @@ pub struct AdminHistoryRecord {
     pub kind: String,
     pub object_id: String,
     pub revision: i64,
+    pub base_revision: Option<i64>,
     pub changed_at: OffsetDateTime,
     pub device_id: Uuid,
     pub tombstone: bool,
@@ -332,6 +339,127 @@ struct ManifestItem {
 #[derive(Clone)]
 pub struct Persistence {
     pool: PgPool,
+}
+
+/// Holds a transaction-scoped lock for one content-addressed payload key.
+/// The lock must cover both object-store mutation and catalog registration/deletion.
+pub struct PayloadLock {
+    connection: PoolConnection<Postgres>,
+    project_id: Uuid,
+    content_hash: String,
+}
+
+#[allow(clippy::missing_errors_doc)]
+impl PayloadLock {
+    /// Registers the catalog row while retaining the object-store/catalog ordering guarantee.
+    pub async fn register_payload(
+        mut self,
+        user_id: Uuid,
+        role: &str,
+        project_id: Uuid,
+        payload: &StoredPayload,
+    ) -> Result<(), PersistenceError> {
+        sqlx::query("SET LOCAL ROLE tasktips_app")
+            .execute(&mut *self.connection)
+            .await?;
+        sqlx::query("SELECT set_config('app.user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *self.connection)
+            .await?;
+        sqlx::query("SELECT set_config('app.role', $1, true)")
+            .bind(role)
+            .execute(&mut *self.connection)
+            .await?;
+        let project_status = sqlx::query_scalar::<_, String>(
+            "SELECT status::text FROM projects WHERE id = $1 FOR UPDATE",
+        )
+        .bind(project_id)
+        .fetch_optional(&mut *self.connection)
+        .await?
+        .ok_or(PersistenceError::NotFound)?;
+        if project_status != "active" {
+            return Err(PersistenceError::ProjectMaintenance);
+        }
+        sqlx::query(
+            "INSERT INTO payloads \
+             (project_id, owner_user_id, content_hash, bucket, object_key, size_bytes, media_type) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (project_id, content_hash) DO NOTHING",
+        )
+        .bind(project_id)
+        .bind(user_id)
+        .bind(&payload.content_hash)
+        .bind(&payload.bucket)
+        .bind(&payload.object_key)
+        .bind(payload.size)
+        .bind(&payload.media_type)
+        .execute(&mut *self.connection)
+        .await?;
+        sqlx::query("COMMIT").execute(&mut *self.connection).await?;
+        Ok(())
+    }
+
+    /// Returns the catalog key if it is still old and unreferenced.
+    pub async fn unreferenced_payload_key(
+        &mut self,
+        older_than: OffsetDateTime,
+    ) -> Result<Option<String>, PersistenceError> {
+        sqlx::query("SET LOCAL ROLE tasktips_worker")
+            .execute(&mut *self.connection)
+            .await?;
+        let key = sqlx::query_scalar::<_, String>(
+            "SELECT p.object_key FROM payloads p \
+             WHERE p.project_id = $1 AND p.content_hash = $2 AND p.created_at < $3 \
+               AND NOT EXISTS (SELECT 1 FROM object_revisions r WHERE r.payload_id = p.id) \
+             FOR UPDATE",
+        )
+        .bind(self.project_id)
+        .bind(&self.content_hash)
+        .bind(older_than)
+        .fetch_optional(&mut *self.connection)
+        .await?;
+        Ok(key)
+    }
+
+    /// Checks whether the payload catalog currently contains this project/hash pair.
+    pub async fn payload_is_referenced(&mut self) -> Result<bool, PersistenceError> {
+        sqlx::query("SET LOCAL ROLE tasktips_worker")
+            .execute(&mut *self.connection)
+            .await?;
+        Ok(sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM payloads \
+             WHERE project_id = $1 AND content_hash = $2)",
+        )
+        .bind(self.project_id)
+        .bind(&self.content_hash)
+        .fetch_one(&mut *self.connection)
+        .await?)
+    }
+
+    /// Deletes the catalog row after its immutable object has been deleted.
+    pub async fn delete_payload_row(mut self) -> Result<(), PersistenceError> {
+        sqlx::query(
+            "DELETE FROM payloads p WHERE p.project_id = $1 AND p.content_hash = $2 \
+             AND NOT EXISTS (SELECT 1 FROM object_revisions r WHERE r.payload_id = p.id)",
+        )
+        .bind(self.project_id)
+        .bind(&self.content_hash)
+        .execute(&mut *self.connection)
+        .await?;
+        sqlx::query("COMMIT").execute(&mut *self.connection).await?;
+        Ok(())
+    }
+
+    /// Releases the lock without changing the catalog.
+    pub async fn finish(mut self) -> Result<(), PersistenceError> {
+        sqlx::query("COMMIT").execute(&mut *self.connection).await?;
+        Ok(())
+    }
+
+    /// Rolls back the lock transaction after an object-store failure.
+    pub async fn rollback(mut self) {
+        let _ = sqlx::query("ROLLBACK").execute(&mut *self.connection).await;
+    }
 }
 
 impl Persistence {
@@ -913,25 +1041,31 @@ impl Persistence {
         project_id: Uuid,
         payload: &StoredPayload,
     ) -> Result<(), PersistenceError> {
-        let mut tx = self.begin_user(user_id, role).await?;
-        require_active_project(&mut tx, project_id).await?;
-        sqlx::query(
-            "INSERT INTO payloads \
-             (project_id, owner_user_id, content_hash, bucket, object_key, size_bytes, media_type) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (project_id, content_hash) DO NOTHING",
-        )
-        .bind(project_id)
-        .bind(user_id)
-        .bind(&payload.content_hash)
-        .bind(&payload.bucket)
-        .bind(&payload.object_key)
-        .bind(payload.size)
-        .bind(&payload.media_type)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(())
+        let lock = self
+            .acquire_payload_lock(project_id, &payload.content_hash)
+            .await?;
+        lock.register_payload(user_id, role, project_id, payload)
+            .await
+    }
+
+    /// Acquires the transaction-scoped lock used to serialize object and catalog changes.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn acquire_payload_lock(
+        &self,
+        project_id: Uuid,
+        content_hash: &str,
+    ) -> Result<PayloadLock, PersistenceError> {
+        let mut connection = self.pool.acquire().await?;
+        sqlx::query("BEGIN").execute(&mut *connection).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("{project_id}:{content_hash}"))
+            .execute(&mut *connection)
+            .await?;
+        Ok(PayloadLock {
+            connection,
+            project_id,
+            content_hash: content_hash.to_owned(),
+        })
     }
 
     /// Validates that an owned project currently accepts sync traffic.
@@ -957,15 +1091,15 @@ impl Persistence {
     /// # Errors
     ///
     /// Returns an error when the worker role cannot inspect or prune the catalog.
-    pub async fn prune_unreferenced_payloads(
+    pub async fn unreferenced_payload_keys(
         &self,
         older_than: OffsetDateTime,
-    ) -> Result<Vec<String>, PersistenceError> {
+    ) -> Result<Vec<(Uuid, String)>, PersistenceError> {
         let mut tx = self.begin_worker().await?;
-        let keys = sqlx::query_scalar::<_, String>(
-            "DELETE FROM payloads p WHERE p.created_at < $1 \
+        let keys = sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT p.project_id, p.content_hash::text FROM payloads p WHERE p.created_at < $1 \
              AND NOT EXISTS (SELECT 1 FROM object_revisions r WHERE r.payload_id = p.id) \
-             RETURNING p.object_key",
+             ORDER BY p.created_at, p.id",
         )
         .bind(older_than)
         .fetch_all(&mut *tx)
@@ -983,7 +1117,7 @@ impl Persistence {
         let mut tx = self.begin_worker().await?;
         let keys = sqlx::query_scalar::<_, String>(
             "SELECT object_key FROM payloads \
-             UNION ALL SELECT manifest_key FROM snapshots WHERE status = 'ready'",
+             UNION ALL SELECT manifest_key FROM snapshots WHERE status IN ('pending', 'ready')",
         )
         .fetch_all(&mut *tx)
         .await?
@@ -1004,7 +1138,7 @@ impl Persistence {
         snapshot_id: Uuid,
     ) -> Result<(i64, i64, serde_json::Value, Vec<u8>), PersistenceError> {
         let mut tx = self.begin_user(user_id, role).await?;
-        let (generation, sequence) = require_active_project(&mut tx, project_id).await?;
+        let (generation, sequence) = require_active_project_for_update(&mut tx, project_id).await?;
         let rows = sqlx::query_as::<_, ManifestRow>(
             "SELECT r.kind::text AS kind, r.object_id AS id, r.schema_version, r.revision, \
                     r.base_revision, r.content_hash::text AS content_hash, r.changed_at, \
@@ -1232,7 +1366,7 @@ impl Persistence {
         let job = sqlx::query_as::<_, RestoreJobRecord>(
             "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
                     status, pre_restore_snapshot_id, generation_before, generation_after, \
-                    restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
+                    restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at, lease_token \
              FROM restore_jobs WHERE id = $1 AND project_id = $2",
         )
         .bind(restore_id)
@@ -1252,7 +1386,9 @@ impl Persistence {
             "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
                     status, pre_restore_snapshot_id, generation_before, generation_after, \
                     restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
-             FROM restore_jobs WHERE status = 'queued' ORDER BY created_at, id \
+             FROM restore_jobs WHERE status = 'queued' \
+                OR (status = 'running' AND lease_expires_at < CURRENT_TIMESTAMP) \
+             ORDER BY created_at, id \
              FOR UPDATE SKIP LOCKED LIMIT 1",
         )
         .fetch_optional(&mut *tx)
@@ -1261,13 +1397,22 @@ impl Persistence {
             tx.commit().await?;
             return Ok(None);
         };
-        let generation = sqlx::query_scalar::<_, i64>(
-            "UPDATE projects SET status = 'maintenance', updated_at = CURRENT_TIMESTAMP \
-             WHERE id = $1 AND status = 'active' RETURNING generation",
-        )
-        .bind(job.project_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let generation = if job.status == "queued" {
+            sqlx::query_scalar::<_, i64>(
+                "UPDATE projects SET status = 'maintenance', updated_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 AND status = 'active' RETURNING generation",
+            )
+            .bind(job.project_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        } else {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT generation FROM projects WHERE id = $1 AND status = 'maintenance' FOR UPDATE",
+            )
+            .bind(job.project_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        };
         let Some(generation) = generation else {
             sqlx::query(
                 "UPDATE restore_jobs SET status = 'failed', error_code = 'PROJECT_MAINTENANCE', \
@@ -1279,15 +1424,18 @@ impl Persistence {
             tx.commit().await?;
             return Err(PersistenceError::ProjectMaintenance);
         };
+        let lease_token = Uuid::new_v4();
         let job = sqlx::query_as::<_, RestoreJobRecord>(
-            "UPDATE restore_jobs SET status = 'running', generation_before = $2, \
-                 started_at = CURRENT_TIMESTAMP WHERE id = $1 \
+            "UPDATE restore_jobs SET status = 'running', generation_before = COALESCE(generation_before, $2), \
+                 lease_token = $3, lease_expires_at = CURRENT_TIMESTAMP + INTERVAL '5 minutes', \
+                 started_at = COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id = $1 \
              RETURNING id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
                        status, pre_restore_snapshot_id, generation_before, generation_after, \
-                       restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at",
+                       restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at, lease_token",
         )
         .bind(job.id)
         .bind(generation)
+        .bind(lease_token)
         .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -1302,9 +1450,13 @@ impl Persistence {
     ) -> Result<(Uuid, Uuid, Vec<u8>), PersistenceError> {
         let mut tx = self.begin_worker().await?;
         let (owner_user_id, generation, sequence) = sqlx::query_as::<_, (Uuid, i64, i64)>(
-            "SELECT owner_user_id, generation, change_seq FROM projects WHERE id = $1 FOR UPDATE",
+            "SELECT p.owner_user_id, p.generation, p.change_seq \
+             FROM projects p JOIN restore_jobs j ON j.project_id = p.id \
+             WHERE p.id = $1 AND j.id = $2 AND j.status = 'running' AND j.lease_token = $3 FOR UPDATE",
         )
         .bind(job.project_id)
+        .bind(job.id)
+        .bind(job.lease_token)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(PersistenceError::NotFound)?;
@@ -1350,11 +1502,15 @@ impl Persistence {
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_conflict)?;
-        sqlx::query("UPDATE restore_jobs SET pre_restore_snapshot_id = $2 WHERE id = $1")
-            .bind(job.id)
-            .bind(snapshot_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE restore_jobs SET pre_restore_snapshot_id = $2 \
+             WHERE id = $1 AND status = 'running' AND lease_token = $3",
+        )
+        .bind(job.id)
+        .bind(snapshot_id)
+        .bind(job.lease_token)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok((snapshot_id, owner_user_id, bytes))
     }
@@ -1380,6 +1536,57 @@ impl Persistence {
         Ok(())
     }
 
+    /// Finalizes a pre-restore snapshot only for the worker holding its lease.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn mark_snapshot_ready_for_job(
+        &self,
+        job_id: Uuid,
+        lease_token: Uuid,
+        snapshot_id: Uuid,
+        bucket: &str,
+        key: &str,
+    ) -> Result<(), PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        sqlx::query(
+            "UPDATE snapshots SET manifest_bucket = $2, manifest_key = $3, status = 'ready' \
+             WHERE id = $1 AND status = 'pending' \
+               AND EXISTS (SELECT 1 FROM restore_jobs WHERE id = $4 AND lease_token = $5 AND status = 'running')",
+        )
+        .bind(snapshot_id)
+        .bind(bucket)
+        .bind(key)
+        .bind(job_id)
+        .bind(lease_token)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Extends a restore lease while a worker is performing object-store work.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn renew_restore_lease(
+        &self,
+        job_id: Uuid,
+        lease_token: Uuid,
+    ) -> Result<(), PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        let updated = sqlx::query(
+            "UPDATE restore_jobs SET lease_expires_at = CURRENT_TIMESTAMP + INTERVAL '5 minutes' \
+             WHERE id = $1 AND status = 'running' AND lease_token = $2",
+        )
+        .bind(job_id)
+        .bind(lease_token)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        if updated != 1 {
+            return Err(PersistenceError::Conflict);
+        }
+        Ok(())
+    }
+
     #[allow(clippy::missing_errors_doc)]
     pub async fn fail_restore_job(
         &self,
@@ -1399,17 +1606,59 @@ impl Persistence {
         Ok(())
     }
 
+    /// Fails a restore only when the worker still owns its lease.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn fail_restore_job_with_lease(
+        &self,
+        job_id: Uuid,
+        lease_token: Uuid,
+        error_code: &str,
+    ) -> Result<(), PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        sqlx::query(
+            "UPDATE restore_jobs SET status = 'failed', error_code = $3, \
+                 lease_token = NULL, lease_expires_at = NULL, finished_at = CURRENT_TIMESTAMP \
+             WHERE id = $1 AND status = 'running' AND lease_token = $2",
+        )
+        .bind(job_id)
+        .bind(lease_token)
+        .bind(error_code)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Applies a restore by appending revisions and advancing project generation.
     #[allow(clippy::missing_errors_doc, clippy::too_many_lines)]
     pub async fn execute_restore(&self, job_id: Uuid) -> Result<(), PersistenceError> {
+        let lease_token = sqlx::query_scalar::<_, Uuid>(
+            "SELECT lease_token FROM restore_jobs \
+             WHERE id = $1 AND status = 'running' AND lease_token IS NOT NULL",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(PersistenceError::Conflict)?;
+        self.execute_restore_with_lease(job_id, lease_token).await
+    }
+
+    /// Applies a restore while fencing workers that lost their lease.
+    #[allow(clippy::missing_errors_doc, clippy::too_many_lines)]
+    pub async fn execute_restore_with_lease(
+        &self,
+        job_id: Uuid,
+        lease_token: Uuid,
+    ) -> Result<(), PersistenceError> {
         let mut tx = self.begin_worker().await?;
         let job = sqlx::query_as::<_, RestoreJobRecord>(
             "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
                     status, pre_restore_snapshot_id, generation_before, generation_after, \
                     restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
-             FROM restore_jobs WHERE id = $1 FOR UPDATE",
+             FROM restore_jobs WHERE id = $1 AND status = 'running' AND lease_token = $2 FOR UPDATE",
         )
         .bind(job_id)
+        .bind(lease_token)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(PersistenceError::NotFound)?;
@@ -1577,12 +1826,14 @@ impl Persistence {
         .await?;
         sqlx::query(
             "UPDATE restore_jobs SET status = 'succeeded', generation_after = $2, restored_objects = $3, \
-                 restored_tombstones = $4, finished_at = CURRENT_TIMESTAMP WHERE id = $1",
+                 restored_tombstones = $4, lease_token = NULL, lease_expires_at = NULL, \
+                 finished_at = CURRENT_TIMESTAMP WHERE id = $1 AND status = 'running' AND lease_token = $5",
         )
         .bind(job_id)
         .bind(generation_after)
         .bind(restored_objects)
         .bind(restored_tombstones)
+        .bind(lease_token)
         .execute(&mut *tx)
         .await?;
         sqlx::query(
@@ -1835,6 +2086,8 @@ impl Persistence {
                         kind: revision.kind,
                         id: revision.id.clone(),
                         code: "PAYLOAD_NOT_FOUND",
+                        message: "payload 不存在",
+                        details: None,
                     });
                     continue;
                 };
@@ -1851,16 +2104,34 @@ impl Persistence {
                         kind: revision.kind,
                         id: revision.id.clone(),
                         code: "PAYLOAD_NOT_FOUND",
+                        message: "payload 不存在",
+                        details: None,
                     });
                     continue;
                 };
                 let size_valid =
                     u64::try_from(size).is_ok_and(|size| size <= revision.kind.max_payload_bytes());
-                if !size_valid || !valid_media_type(revision.kind, &media_type) {
+                if !size_valid {
+                    results.push(PushItemResult::Rejected {
+                        kind: revision.kind,
+                        id: revision.id.clone(),
+                        code: "PAYLOAD_TOO_LARGE",
+                        message: "payload 超过对象类型限制",
+                        details: Some(json!({
+                            "kind": revision.kind,
+                            "maxBytes": revision.kind.max_payload_bytes(),
+                            "actualBytes": size,
+                        })),
+                    });
+                    continue;
+                }
+                if !valid_media_type(revision.kind, &media_type) {
                     results.push(PushItemResult::Rejected {
                         kind: revision.kind,
                         id: revision.id.clone(),
                         code: "INVALID_REQUEST",
+                        message: "payload 媒体类型与对象类型不兼容",
+                        details: None,
                     });
                     continue;
                 }
@@ -2146,14 +2417,8 @@ impl Persistence {
         let mut tx = self.begin_admin().await?;
         let overview = sqlx::query_as::<_, AdminOverviewRow>(
             "SELECT \
-                (SELECT count(*) FROM admin_user_metadata) AS users, \
-                (SELECT count(*) FROM admin_user_metadata WHERE status = 'active') AS active_users, \
-                (SELECT count(*) FROM admin_project_metadata) AS projects, \
-                (SELECT count(*) FROM admin_device_metadata) AS devices, \
-                (SELECT count(*) FROM object_revisions) AS revisions, \
-                (SELECT count(*) FROM object_revisions WHERE is_tombstone) AS tombstones, \
-                (SELECT COALESCE(sum(size_bytes), 0)::bigint FROM payloads) AS payload_bytes, \
-                (SELECT count(*) FROM restore_jobs WHERE status IN ('queued', 'running')) AS queued_restores",
+                users, active_users, projects, devices, revisions, tombstones, payload_bytes, queued_restores \
+             FROM admin_operational_counts",
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -2182,10 +2447,11 @@ impl Persistence {
         self.verify_admin(actor_user_id).await?;
         let mut tx = self.begin_admin().await?;
         let mut rows = sqlx::query_as::<_, AdminHistoryRecord>(
-            "SELECT r.kind::text AS kind, r.object_id, r.revision, r.changed_at, r.device_id, \
-                    r.is_tombstone AS tombstone, c.sequence AS change_sequence \
-             FROM change_log c JOIN object_revisions r ON r.id = c.revision_id \
-             WHERE c.project_id = $1 AND c.sequence > $2 ORDER BY c.sequence LIMIT $3",
+            "SELECT kind, object_id, revision, base_revision, changed_at, device_id, \
+                    tombstone, change_sequence \
+             FROM admin_history_metadata \
+             WHERE project_id = $1 AND change_sequence > $2 \
+             ORDER BY change_sequence LIMIT $3",
         )
         .bind(project_id)
         .bind(after_sequence)
@@ -2213,7 +2479,7 @@ impl Persistence {
             "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
                     status, pre_restore_snapshot_id, generation_before, generation_after, \
                     restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
-             FROM restore_jobs WHERE project_id = COALESCE($1, project_id) \
+             FROM admin_restore_job_metadata WHERE project_id = COALESCE($1, project_id) \
              ORDER BY created_at DESC, id DESC LIMIT 200",
         )
         .bind(project_id)
@@ -2242,7 +2508,7 @@ impl Persistence {
         self.verify_admin(actor_user_id).await?;
         let mut tx = self.begin_admin().await?;
         let (owner_user_id, current_sequence, status) = sqlx::query_as::<_, (Uuid, i64, String)>(
-            "SELECT owner_user_id, change_seq, status::text FROM projects WHERE id = $1 FOR UPDATE",
+            "SELECT owner_user_id, change_seq, status::text FROM admin_lock_project($1)",
         )
         .bind(project_id)
         .fetch_optional(&mut *tx)
@@ -2255,7 +2521,8 @@ impl Persistence {
         }
         if let Some(snapshot_id) = snapshot_id {
             let exists = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM snapshots WHERE id = $1 AND project_id = $2 AND status = 'ready')",
+                "SELECT EXISTS (SELECT 1 FROM admin_snapshot_metadata \
+                 WHERE id = $1 AND project_id = $2 AND status = 'ready')",
             )
             .bind(snapshot_id)
             .bind(project_id)
@@ -2265,15 +2532,13 @@ impl Persistence {
                 return Err(PersistenceError::NotFound);
             }
         }
-        let job = sqlx::query_as::<_, RestoreJobRecord>(
+        let job_id = Uuid::new_v4();
+        sqlx::query(
             "INSERT INTO restore_jobs \
                  (id, project_id, owner_user_id, requested_by, snapshot_id, target_change_sequence, reason, request_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             RETURNING id, project_id, requested_by, snapshot_id, target_change_sequence, reason, status, \
-                       pre_restore_snapshot_id, generation_before, generation_after, restored_objects, \
-                       restored_tombstones, error_code, created_at, started_at, finished_at",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind(Uuid::new_v4())
+        .bind(job_id)
         .bind(project_id)
         .bind(owner_user_id)
         .bind(actor_user_id)
@@ -2281,16 +2546,25 @@ impl Persistence {
         .bind(target_change_sequence)
         .bind(reason)
         .bind(request_id)
-        .fetch_one(&mut *tx)
+        .execute(&mut *tx)
         .await?;
         insert_audit(
             &mut tx,
             actor_user_id,
             Some(owner_user_id),
             "restore.requested",
-            json!({"projectId": project_id, "restoreId": job.id, "source": "admin"}),
+            json!({"projectId": project_id, "restoreId": job_id, "source": "admin"}),
             request_id,
         )
+        .await?;
+        let job = sqlx::query_as::<_, RestoreJobRecord>(
+            "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
+                    status, pre_restore_snapshot_id, generation_before, generation_after, \
+                    restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
+             FROM admin_restore_job_metadata WHERE id = $1",
+        )
+        .bind(job_id)
+        .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
         Ok(job)
@@ -2598,7 +2872,7 @@ fn valid_media_type(kind: ObjectKind, media_type: &str) -> bool {
     match kind {
         ObjectKind::Todo => essence == "text/markdown" || essence == "text/plain",
         ObjectKind::Classification | ObjectKind::Index => essence == "application/json",
-        ObjectKind::Image => essence.starts_with("image/"),
+        ObjectKind::Image => essence.starts_with("image/") || essence == "application/octet-stream",
     }
 }
 

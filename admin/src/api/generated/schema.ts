@@ -735,6 +735,7 @@ export interface components {
       | 'REVISION_CONFLICT'
       | 'CONTENT_HASH_MISMATCH'
       | 'PAYLOAD_NOT_FOUND'
+      | 'PAYLOAD_TOO_LARGE'
       | 'CURSOR_INVALID'
       | 'IDEMPOTENCY_CONFLICT'
       | 'RATE_LIMITED'
@@ -746,6 +747,11 @@ export interface components {
       actualRevision?: number;
       expectedGeneration?: number;
       actualGeneration?: number;
+      kind?: components['schemas']['ObjectKind'];
+      /** Format: int64 */
+      maxBytes?: number;
+      /** Format: int64 */
+      actualBytes?: number;
     };
     /** @enum {string} */
     ObjectKind: 'todo' | 'classification' | 'index' | 'image';
@@ -842,7 +848,7 @@ export interface components {
     HistoryResponse: {
       items: components['schemas']['SyncChange'][];
       hasMore: boolean;
-      nextSequence: number;
+      nextSequence?: number | null;
     };
     Snapshot: {
       /** Format: uuid */
@@ -938,6 +944,8 @@ export interface components {
       kind: components['schemas']['ObjectKind'];
       id: string;
       code: components['schemas']['ErrorCode'];
+      message?: string;
+      details?: components['schemas']['ErrorDetails'];
     };
     LoginRequest: {
       /** Format: email */
@@ -1081,6 +1089,7 @@ export interface components {
       kind: components['schemas']['ObjectKind'];
       objectId: string;
       revision: number;
+      baseRevision: number | null;
       /** Format: date-time */
       changedAt: string;
       /** Format: uuid */
@@ -1091,7 +1100,7 @@ export interface components {
     AdminHistoryResponse: {
       items: components['schemas']['AdminHistoryItem'][];
       hasMore: boolean;
-      nextSequence: number;
+      nextSequence?: number | null;
     };
     RestoreJobList: {
       items: components['schemas']['RestoreJob'][];
@@ -1692,6 +1701,7 @@ export interface operations {
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
       404: components['responses']['PayloadNotFound'];
+      416: components['responses']['InvalidRequest'];
       423: components['responses']['ProjectMaintenance'];
       503: components['responses']['StorageUnavailable'];
     };

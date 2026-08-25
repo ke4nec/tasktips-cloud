@@ -501,7 +501,11 @@ pub async fn put_payload(
             request_id,
         ));
     }
-    let payload = object_store
+    let payload_lock = database
+        .acquire_payload_lock(project_id, &content_hash)
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let payload = match object_store
         .put_payload(
             claims.sub,
             project_id,
@@ -510,12 +514,18 @@ pub async fn put_payload(
             bytes.freeze(),
         )
         .await
-        .map_err(|error| map_object_store(&error, request_id.clone()))?;
+    {
+        Ok(payload) => payload,
+        Err(error) => {
+            payload_lock.rollback().await;
+            return Err(map_object_store(&error, request_id));
+        }
+    };
     state.metrics.payload_upload_bytes_total.fetch_add(
         u64::try_from(content_length).unwrap_or(u64::MAX),
         std::sync::atomic::Ordering::Relaxed,
     );
-    database
+    payload_lock
         .register_payload(
             claims.sub,
             &claims.role,
@@ -937,9 +947,8 @@ async fn history_response(
         .map_err(|error| map_project_error(error, request_id.clone()))?;
     let next_sequence = records
         .last()
-        .map_or(query.after_sequence.unwrap_or(0), |record| {
-            record.change_sequence
-        });
+        .filter(|_| has_more)
+        .map(|record| record.change_sequence);
     Ok(Json(json!({
         "items": records.iter().map(sync_record_json).collect::<Vec<_>>(),
         "hasMore": has_more,
@@ -1528,7 +1537,8 @@ pub async fn admin_history_metadata(
         .map_err(|error| map_project_error(error, request_id.clone()))?;
     let next_sequence = items
         .last()
-        .map_or(after_sequence, |item| item.change_sequence);
+        .filter(|_| has_more)
+        .map(|item| item.change_sequence);
     Ok(Json(
         json!({"items": items, "hasMore": has_more, "nextSequence": next_sequence}),
     ))
@@ -1781,6 +1791,13 @@ fn map_object_store(error: &ObjectStoreError, request_id: String) -> ApiError {
             StatusCode::UNPROCESSABLE_ENTITY,
             "CONTENT_HASH_MISMATCH",
             "payload 的 SHA-256 校验失败",
+            false,
+            request_id,
+        ),
+        ObjectStoreError::InvalidRange => ApiError::new(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "INVALID_REQUEST",
+            "Range 请求无效",
             false,
             request_id,
         ),

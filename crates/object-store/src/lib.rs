@@ -1,4 +1,4 @@
-use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
+use aws_sdk_s3::{Client as S3Client, error::ProvideErrorMetadata, primitives::ByteStream};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -31,6 +31,8 @@ pub enum ObjectStoreError {
     NotFound,
     #[error("payload content hash did not match")]
     HashMismatch,
+    #[error("payload range was invalid")]
+    InvalidRange,
     #[error("object store operation failed")]
     Backend,
 }
@@ -280,11 +282,13 @@ impl ObjectStore {
             request = request.range(range);
         }
         let output = request.send().await.map_err(|error| {
-            if error
-                .as_service_error()
+            let service_error = error.as_service_error();
+            if service_error
                 .is_some_and(aws_sdk_s3::operation::get_object::GetObjectError::is_no_such_key)
             {
                 ObjectStoreError::NotFound
+            } else if service_error.is_some_and(|error| error.code() == Some("InvalidRange")) {
+                ObjectStoreError::InvalidRange
             } else {
                 ObjectStoreError::Backend
             }
@@ -326,9 +330,7 @@ impl ObjectStore {
                 let Some(key) = object.key() else {
                     continue;
                 };
-                let managed_object = key.contains("/payloads/sha256/")
-                    || key.contains("/uploads/")
-                    || key.contains("/snapshots/");
+                let managed_object = key.contains("/uploads/");
                 let old_enough = object
                     .last_modified()
                     .and_then(|modified| OffsetDateTime::from_unix_timestamp(modified.secs()).ok())
@@ -350,6 +352,65 @@ impl ObjectStore {
             }
         }
         Ok(deleted)
+    }
+
+    /// Lists stale payload objects for the worker to recheck under a database lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when `RustFS` cannot list objects.
+    pub async fn stale_payload_keys(
+        &self,
+        referenced_keys: &HashSet<String>,
+        older_than: OffsetDateTime,
+    ) -> Result<Vec<String>, ObjectStoreError> {
+        let mut continuation_token = None;
+        let mut candidates = Vec::new();
+        loop {
+            let output = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix("users/")
+                .set_continuation_token(continuation_token)
+                .send()
+                .await
+                .map_err(|_| ObjectStoreError::Backend)?;
+            for object in output.contents() {
+                let Some(key) = object.key() else {
+                    continue;
+                };
+                let old_enough = object
+                    .last_modified()
+                    .and_then(|modified| OffsetDateTime::from_unix_timestamp(modified.secs()).ok())
+                    .is_some_and(|modified| modified < older_than);
+                if key.contains("/payloads/sha256/") && old_enough && !referenced_keys.contains(key)
+                {
+                    candidates.push(key.to_owned());
+                }
+            }
+            continuation_token = output.next_continuation_token().map(str::to_owned);
+            if continuation_token.is_none() {
+                break;
+            }
+        }
+        Ok(candidates)
+    }
+
+    /// Deletes one object while the caller holds the matching catalog lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when `RustFS` rejects the delete request.
+    pub async fn delete_key(&self, key: &str) -> Result<(), ObjectStoreError> {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|_| ObjectStoreError::Backend)?;
+        Ok(())
     }
 
     async fn head_key(&self, key: &str) -> Result<Option<(u64, Option<String>)>, ObjectStoreError> {
@@ -385,13 +446,35 @@ pub fn payload_key(owner_user_id: Uuid, project_id: Uuid, content_hash: &str) ->
 }
 
 #[must_use]
+pub fn parse_payload_key(key: &str) -> Option<(Uuid, Uuid, String)> {
+    let mut parts = key.split('/');
+    if parts.next()? != "users" {
+        return None;
+    }
+    let owner_user_id = Uuid::parse_str(parts.next()?).ok()?;
+    if parts.next()? != "projects" {
+        return None;
+    }
+    let project_id = Uuid::parse_str(parts.next()?).ok()?;
+    if parts.next()? != "payloads" || parts.next()? != "sha256" {
+        return None;
+    }
+    let _shard = parts.next()?;
+    let content_hash = parts.next()?.to_owned();
+    if parts.next().is_some() || content_hash.len() != 64 {
+        return None;
+    }
+    Some((owner_user_id, project_id, content_hash))
+}
+
+#[must_use]
 pub fn manifest_key(owner_user_id: Uuid, project_id: Uuid, snapshot_id: Uuid) -> String {
     format!("users/{owner_user_id}/projects/{project_id}/snapshots/{snapshot_id}/manifest.json")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::payload_key;
+    use super::{parse_payload_key, payload_key};
     use uuid::Uuid;
 
     #[test]
@@ -402,6 +485,10 @@ mod tests {
         assert_eq!(
             payload_key(owner, project, hash),
             format!("users/{owner}/projects/{project}/payloads/sha256/ab/{hash}")
+        );
+        assert_eq!(
+            parse_payload_key(&payload_key(owner, project, hash)),
+            Some((owner, project, hash.to_owned()))
         );
     }
 }

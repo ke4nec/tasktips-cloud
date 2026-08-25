@@ -76,7 +76,7 @@ impl ObjectKind {
     #[must_use]
     pub const fn max_payload_bytes(self) -> u64 {
         match self {
-            Self::Todo => 2 * 1024 * 1024,
+            Self::Todo => 8 * 1024 * 1024,
             Self::Classification | Self::Index => 5 * 1024 * 1024,
             Self::Image => 10 * 1024 * 1024,
         }

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::{env, time::Duration};
-use tasktips_object_store::{ObjectStore, RustFsConfig};
+use tasktips_object_store::{ObjectStore, RustFsConfig, parse_payload_key};
 use tasktips_persistence::Persistence;
 use time::OffsetDateTime;
 use tokio::time::{MissedTickBehavior, interval};
@@ -64,17 +64,19 @@ async fn process_restore_jobs(
     object_store: &ObjectStore,
 ) -> Result<(), Box<dyn std::error::Error>> {
     while let Some(job) = persistence.claim_restore_job().await? {
+        let lease_token = job.lease_token.ok_or("restore claim missing lease token")?;
         let prepared = persistence.create_pre_restore_snapshot(&job).await;
         let (snapshot_id, owner_user_id, bytes) = match prepared {
             Ok(value) => value,
             Err(error) => {
                 persistence
-                    .fail_restore_job(job.id, "PRE_RESTORE_SNAPSHOT_FAILED")
+                    .fail_restore_job_with_lease(job.id, lease_token, "PRE_RESTORE_SNAPSHOT_FAILED")
                     .await?;
                 return Err(error.into());
             }
         };
         let hash = hex::encode(Sha256::digest(&bytes));
+        persistence.renew_restore_lease(job.id, lease_token).await?;
         let manifest = object_store
             .put_manifest(
                 owner_user_id,
@@ -88,17 +90,27 @@ async fn process_restore_jobs(
             Ok(value) => value,
             Err(error) => {
                 persistence
-                    .fail_restore_job(job.id, "PRE_RESTORE_MANIFEST_FAILED")
+                    .fail_restore_job_with_lease(job.id, lease_token, "PRE_RESTORE_MANIFEST_FAILED")
                     .await?;
                 return Err(error.into());
             }
         };
         persistence
-            .mark_snapshot_ready(snapshot_id, &manifest.bucket, &manifest.key)
+            .mark_snapshot_ready_for_job(
+                job.id,
+                lease_token,
+                snapshot_id,
+                &manifest.bucket,
+                &manifest.key,
+            )
             .await?;
-        if let Err(error) = persistence.execute_restore(job.id).await {
+        persistence.renew_restore_lease(job.id, lease_token).await?;
+        if let Err(error) = persistence
+            .execute_restore_with_lease(job.id, lease_token)
+            .await
+        {
             persistence
-                .fail_restore_job(job.id, "RESTORE_FAILED")
+                .fail_restore_job_with_lease(job.id, lease_token, "RESTORE_FAILED")
                 .await?;
             return Err(error.into());
         }
@@ -111,14 +123,54 @@ async fn cleanup_orphans(
     object_store: &ObjectStore,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cutoff = OffsetDateTime::now_utc() - ORPHAN_AGE;
-    let catalog_entries = persistence.prune_unreferenced_payloads(cutoff).await?;
+    let candidates = persistence.unreferenced_payload_keys(cutoff).await?;
+    let mut catalog_entries = 0_u64;
+    for (project_id, content_hash) in candidates {
+        let mut lock = persistence
+            .acquire_payload_lock(project_id, &content_hash)
+            .await?;
+        let Some(object_key) = lock.unreferenced_payload_key(cutoff).await? else {
+            lock.finish().await?;
+            continue;
+        };
+        if let Err(error) = object_store.delete_key(&object_key).await {
+            lock.rollback().await;
+            return Err(error.into());
+        }
+        lock.delete_payload_row().await?;
+        catalog_entries += 1;
+    }
+    let referenced_keys = persistence.referenced_payload_keys().await?;
+    let stale_payload_keys = object_store
+        .stale_payload_keys(&referenced_keys, cutoff)
+        .await?;
+    let mut deleted_payload_objects = 0_u64;
+    for object_key in stale_payload_keys {
+        let Some((_, project_id, content_hash)) = parse_payload_key(&object_key) else {
+            continue;
+        };
+        let mut lock = persistence
+            .acquire_payload_lock(project_id, &content_hash)
+            .await?;
+        if lock.payload_is_referenced().await? {
+            lock.finish().await?;
+            continue;
+        }
+        if let Err(error) = object_store.delete_key(&object_key).await {
+            lock.rollback().await;
+            return Err(error.into());
+        }
+        lock.finish().await?;
+        deleted_payload_objects += 1;
+    }
     let referenced_keys = persistence.referenced_payload_keys().await?;
     let deleted_objects = object_store
         .delete_orphans(&referenced_keys, cutoff)
         .await?;
     info!(
-        catalog_entries = catalog_entries.len(),
-        deleted_objects, "payload orphan cleanup completed"
+        catalog_entries,
+        deleted_objects = deleted_objects + deleted_payload_objects,
+        "payload orphan cleanup completed"
     );
     Ok(())
 }
