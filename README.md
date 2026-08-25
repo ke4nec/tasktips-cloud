@@ -37,6 +37,25 @@ cargo run -p tasktips-api
 默认监听 `127.0.0.1:8080`。`/health/live` 只验证进程；在 PostgreSQL 和 RustFS
 不可用或配置缺失时，`/health/ready` 返回未就绪，并在依赖恢复后重新探测。
 
+## 开发环境
+
+PostgreSQL 和 RustFS 通过独立的开发 Compose 启动，API 与 worker 在宿主机运行：
+
+```text
+docker compose -f deploy/compose.dev.yaml up -d
+cp deploy/env.dev.example deploy/.env.dev
+set -a; . deploy/.env.dev; set +a
+cargo run -p tasktips-api -- migrate
+cargo run -p tasktips-api
+```
+
+开发栈使用固定开发凭据，只绑定 `127.0.0.1`（PostgreSQL `5432`、RustFS S3 `9000`、
+控制台 `http://127.0.0.1:9001/rustfs/console`），并在启动时自动创建 `tasktips-data`
+bucket。端口或凭据冲突时可用 `TASKTIPS_DEV_*` 环境变量覆盖。开发栈只用于本地开发，
+不得用于生产；清空全部数据使用 `docker compose -f deploy/compose.dev.yaml down -v`。
+
+## 完整部署环境
+
 完整环境需要 Docker Compose：
 
 ```text
