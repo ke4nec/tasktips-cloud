@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cursor;
 mod routes;
 
 use axum::{
@@ -21,11 +22,13 @@ use tower_http::{
 };
 
 use auth::AuthService;
+use cursor::CursorSigner;
 use routes::{
-    activate_invitation, admin_list_devices, admin_list_projects, admin_list_users,
+    activate_invitation, admin_list_devices, admin_list_projects, admin_list_users, bootstrap,
     change_password, create_invitation, create_project, current_user, disable_account,
-    disable_project, enable_account, get_project, list_devices, list_projects, login, logout,
-    refresh, register_device, rename_project, revoke_device, update_device,
+    disable_project, enable_account, get_payload, get_project, head_payload, list_devices,
+    list_projects, login, logout, pull, push, put_payload, refresh, register_device,
+    rename_project, revoke_device, update_device,
 };
 
 #[derive(Clone, Default)]
@@ -33,6 +36,8 @@ pub struct AppState {
     readiness: Readiness,
     pub(crate) database: Option<Persistence>,
     pub(crate) auth: Option<AuthService>,
+    pub(crate) object_store: Option<ObjectStore>,
+    pub(crate) cursor: Option<CursorSigner>,
 }
 
 impl AppState {
@@ -46,7 +51,16 @@ impl AppState {
             readiness,
             database,
             auth,
+            object_store: None,
+            cursor: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_sync(mut self, object_store: ObjectStore, cursor: CursorSigner) -> Self {
+        self.object_store = Some(object_store);
+        self.cursor = Some(cursor);
+        self
     }
 
     #[must_use]
@@ -149,6 +163,16 @@ pub fn build_application_router(state: AppState) -> Router {
             "/api/v1/projects/{projectId}/disable",
             post(disable_project),
         )
+        .route(
+            "/api/v1/projects/{projectId}/payloads/{contentHash}",
+            get(get_payload).head(head_payload).put(put_payload),
+        )
+        .route(
+            "/api/v1/projects/{projectId}/sync/bootstrap",
+            post(bootstrap),
+        )
+        .route("/api/v1/projects/{projectId}/sync/pull", post(pull))
+        .route("/api/v1/projects/{projectId}/sync/push", post(push))
         .route("/api/v1/devices", get(list_devices))
         .route("/api/v1/devices/register", post(register_device))
         .route("/api/v1/devices/{deviceId}", patch(update_device))

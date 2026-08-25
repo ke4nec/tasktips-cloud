@@ -231,6 +231,85 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/projects/{projectId}/payloads/{contentHash}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        contentHash: components['parameters']['ContentHash'];
+      };
+      cookie?: never;
+    };
+    /** Stream payload bytes, optionally using a byte range */
+    get: operations['getPayload'];
+    /** Upload and verify immutable payload bytes */
+    put: operations['putPayload'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    /** Check whether verified payload bytes exist in the owner project scope */
+    head: operations['headPayload'];
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/sync/bootstrap': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Read all heads and tombstones from a stable change sequence */
+    post: operations['bootstrapSync'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/sync/pull': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Pull permanent change-log entries after a signed cursor */
+    post: operations['pullSyncChanges'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/sync/push': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Push up to 100 object and tombstone CAS changes */
+    post: operations['pushSyncChanges'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/devices': {
     parameters: {
       query?: never;
@@ -460,6 +539,136 @@ export interface components {
       expectedGeneration?: number;
       actualGeneration?: number;
     };
+    /** @enum {string} */
+    ObjectKind: 'todo' | 'classification' | 'index' | 'image';
+    BootstrapRequest: {
+      pageToken?: string;
+      limit?: number;
+    };
+    BootstrapResponse: {
+      generation: number;
+      items: components['schemas']['SyncChange'][];
+      hasMore: boolean;
+      nextPageToken: string | null;
+      cursor: string | null;
+    };
+    PullRequest: {
+      cursor: string;
+      limit?: number;
+    };
+    PullResponse: {
+      generation: number;
+      changes: components['schemas']['SyncChange'][];
+      nextCursor: string;
+      hasMore: boolean;
+    };
+    SyncChange:
+      | components['schemas']['SyncObjectChange']
+      | components['schemas']['SyncTombstoneChange'];
+    SyncObjectChange: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'SyncObjectChange';
+      kind: components['schemas']['ObjectKind'];
+      id: string;
+      schemaVersion: number;
+      revision: number;
+      baseRevision?: number | null;
+      contentHash: string;
+      /** Format: date-time */
+      updatedAt: string;
+      /** Format: uuid */
+      deviceId: string;
+      changeSequence: number;
+    };
+    SyncTombstoneChange: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'SyncTombstoneChange';
+      kind: components['schemas']['ObjectKind'];
+      id: string;
+      revision: number;
+      baseRevision?: number | null;
+      /** Format: date-time */
+      deletedAt: string;
+      /** Format: uuid */
+      deviceId: string;
+      changeSequence: number;
+    };
+    PushRequest: {
+      requestId: string;
+      generation: number;
+      objects: components['schemas']['PushObject'][];
+      tombstones: components['schemas']['PushTombstone'][];
+    };
+    PushObject: {
+      kind: components['schemas']['ObjectKind'];
+      id: string;
+      schemaVersion: number;
+      revision: number;
+      baseRevision?: number | null;
+      contentHash: string;
+      /** Format: date-time */
+      updatedAt: string;
+      /** Format: uuid */
+      deviceId: string;
+    };
+    PushTombstone: {
+      kind: components['schemas']['ObjectKind'];
+      id: string;
+      revision: number;
+      baseRevision?: number | null;
+      /** Format: date-time */
+      deletedAt: string;
+      /** Format: uuid */
+      deviceId: string;
+    };
+    PushResponse: {
+      generation: number;
+      results: components['schemas']['PushItemResult'][];
+    };
+    PushItemResult:
+      | components['schemas']['PushAppliedResult']
+      | components['schemas']['PushConflictResult']
+      | components['schemas']['PushRejectedResult'];
+    PushAppliedResult: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      status: 'PushAppliedResult';
+      kind: components['schemas']['ObjectKind'];
+      id: string;
+      revision: number;
+      changeSequence: number;
+      /** Format: date-time */
+      changedAt: string;
+    };
+    PushConflictResult: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      status: 'PushConflictResult';
+      kind: components['schemas']['ObjectKind'];
+      id: string;
+      expectedRevision: number | null;
+      actualRevision: number | null;
+    };
+    PushRejectedResult: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      status: 'PushRejectedResult';
+      kind: components['schemas']['ObjectKind'];
+      id: string;
+      code: components['schemas']['ErrorCode'];
+    };
     LoginRequest: {
       /** Format: email */
       email: string;
@@ -662,11 +871,66 @@ export interface components {
         'application/json': components['schemas']['ErrorResponse'];
       };
     };
+    /** @description The payload does not exist in the authenticated owner/project scope. */
+    PayloadNotFound: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The raw-byte SHA-256 does not match contentHash. */
+    ContentHashMismatch: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The signed cursor is invalid or belongs to another owner/project. */
+    CursorInvalid: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The request belongs to another project generation. */
+    GenerationMismatch: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The project does not currently accept sync traffic. */
+    ProjectMaintenance: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description RustFS is temporarily unavailable. */
+    StorageUnavailable: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
   };
   parameters: {
     ProjectId: string;
     DeviceId: string;
     UserId: string;
+    ContentHash: string;
   };
   requestBodies: never;
   headers: never;
@@ -1051,6 +1315,211 @@ export interface operations {
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
       404: components['responses']['ProjectNotFound'];
+    };
+  };
+  getPayload: {
+    parameters: {
+      query?: never;
+      header?: {
+        Range?: string;
+      };
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        contentHash: components['parameters']['ContentHash'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Complete payload bytes. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/octet-stream': string;
+        };
+      };
+      /** @description Requested payload byte range. */
+      206: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/octet-stream': string;
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['PayloadNotFound'];
+      423: components['responses']['ProjectMaintenance'];
+      503: components['responses']['StorageUnavailable'];
+    };
+  };
+  putPayload: {
+    parameters: {
+      query?: never;
+      header: {
+        'Content-Length': number;
+        'Content-Type': string;
+      };
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        contentHash: components['parameters']['ContentHash'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/octet-stream': string;
+      };
+    };
+    responses: {
+      /** @description The verified payload is available under its content hash. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      422: components['responses']['ContentHashMismatch'];
+      423: components['responses']['ProjectMaintenance'];
+      503: components['responses']['StorageUnavailable'];
+    };
+  };
+  headPayload: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        contentHash: components['parameters']['ContentHash'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Payload metadata. No object-store key or credential is returned. */
+      200: {
+        headers: {
+          'Content-Length'?: number;
+          'Content-Type'?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['PayloadNotFound'];
+      423: components['responses']['ProjectMaintenance'];
+      503: components['responses']['StorageUnavailable'];
+    };
+  };
+  bootstrapSync: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['BootstrapRequest'];
+      };
+    };
+    responses: {
+      /** @description A stable bootstrap page. cursor is present only on the final page. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['BootstrapResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+      409: components['responses']['GenerationMismatch'];
+      423: components['responses']['ProjectMaintenance'];
+    };
+  };
+  pullSyncChanges: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PullRequest'];
+      };
+    };
+    responses: {
+      /** @description Incremental object and tombstone changes. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PullResponse'];
+        };
+      };
+      400: components['responses']['CursorInvalid'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+      409: components['responses']['GenerationMismatch'];
+      423: components['responses']['ProjectMaintenance'];
+    };
+  };
+  pushSyncChanges: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PushRequest'];
+      };
+    };
+    responses: {
+      /** @description Per-item applied, conflict, or rejected results. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PushResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+      /** @description Generation, bootstrap, or idempotency request-level rejection. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      423: components['responses']['ProjectMaintenance'];
     };
   };
   listDevices: {

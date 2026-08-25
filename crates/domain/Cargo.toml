@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 uuid.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true

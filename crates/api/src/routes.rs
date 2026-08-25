@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    body::to_bytes,
+    body::{Body, to_bytes},
     extract::{
         FromRequest, FromRequestParts, Path, Request, State,
         rejection::{JsonRejection, PathRejection},
@@ -8,13 +8,18 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
+use bytes::BytesMut;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use std::net::IpAddr;
-use tasktips_application::{AccountStatus, normalize_email, valid_password};
+use tasktips_application::{AccountStatus, ObjectKind, normalize_email, valid_password};
+use tasktips_object_store::ObjectStoreError;
 use tasktips_persistence::{
-    DeviceProfile, NewInvitation, NewRefreshToken, Persistence, PersistenceError, UserRecord,
-    invitation_expiry, refresh_expiry,
+    DeviceProfile, NewInvitation, NewRefreshToken, NewSyncRevision, Persistence, PersistenceError,
+    StoredPayload, SyncRecord, UserRecord, invitation_expiry, refresh_expiry,
 };
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::{
@@ -23,10 +28,12 @@ use crate::{
         AccessClaims, AuthError, AuthOperation, AuthService, hash_password, opaque_token_hash,
         verify_password,
     },
+    cursor::{CursorClaims, CursorKind},
 };
 
 const ADMIN_REFRESH_COOKIE: &str = "tasktips_refresh";
 const MAX_OPTIONAL_JSON_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +42,8 @@ struct ErrorResponse {
     message: &'static str,
     retryable: bool,
     request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -58,8 +67,14 @@ impl ApiError {
                 message,
                 retryable,
                 request_id,
+                details: None,
             },
         }
+    }
+
+    fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.body.details = Some(details);
+        self
     }
 
     fn invalid(message: &'static str, request_id: String) -> Self {
@@ -121,6 +136,16 @@ impl ApiError {
             request_id,
         )
     }
+
+    fn cursor_invalid(request_id: String) -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "CURSOR_INVALID",
+            "同步 cursor 无效",
+            false,
+            request_id,
+        )
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -146,6 +171,26 @@ where
             .map_err(|_rejection: JsonRejection| {
                 ApiError::invalid("请求 JSON 格式或字段无效", request_id)
             })
+    }
+}
+
+pub struct ApiLimitedJson<T>(pub T);
+
+impl<S, T> FromRequest<S> for ApiLimitedJson<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(request: Request, _state: &S) -> Result<Self, Self::Rejection> {
+        let request_id = request_id(request.headers());
+        let bytes = to_bytes(request.into_body(), MAX_OPTIONAL_JSON_BYTES)
+            .await
+            .map_err(|_| ApiError::invalid("请求 JSON 超过 2 MiB", request_id.clone()))?;
+        serde_json::from_slice(&bytes)
+            .map(Self)
+            .map_err(|_| ApiError::invalid("请求 JSON 格式或字段无效", request_id))
     }
 }
 
@@ -284,6 +329,425 @@ pub struct CreateInvitationResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountStatusRequest {
     reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BootstrapRequest {
+    page_token: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PullRequest {
+    cursor: String,
+    limit: Option<i64>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PushRequest {
+    request_id: String,
+    generation: i64,
+    objects: Vec<PushObject>,
+    tombstones: Vec<PushTombstone>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PushObject {
+    kind: ObjectKind,
+    id: String,
+    schema_version: i32,
+    revision: i64,
+    base_revision: Option<i64>,
+    content_hash: String,
+    updated_at: time::OffsetDateTime,
+    device_id: Uuid,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PushTombstone {
+    kind: ObjectKind,
+    id: String,
+    revision: i64,
+    base_revision: Option<i64>,
+    deleted_at: time::OffsetDateTime,
+    device_id: Uuid,
+}
+
+pub async fn head_payload(
+    State(state): State<AppState>,
+    ApiPath((project_id, content_hash)): ApiPath<(Uuid, String)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_content_hash(&content_hash, &request_id)?;
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    database
+        .validate_sync_project(claims.sub, &claims.role, project_id)
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let object_store = sync_object_store(&state, &request_id)?;
+    let payload = object_store
+        .head_payload(claims.sub, project_id, &content_hash)
+        .await
+        .map_err(|error| map_object_store(&error, request_id.clone()))?
+        .ok_or_else(|| payload_not_found(request_id.clone()))?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, payload.size)
+        .header(header::CONTENT_TYPE, payload.media_type)
+        .body(Body::empty())
+        .map_err(|_| ApiError::internal(request_id))
+}
+
+pub async fn put_payload(
+    State(state): State<AppState>,
+    ApiPath((project_id, content_hash)): ApiPath<(Uuid, String)>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(request.headers());
+    validate_content_hash(&content_hash, &request_id)?;
+    let content_length = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|length| *length <= MAX_PAYLOAD_BYTES)
+        .ok_or_else(|| ApiError::invalid("Content-Length 缺失或超过 10 MiB", request_id.clone()))?;
+    let media_type = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty() && value.len() <= 255)
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::invalid("Content-Type 缺失或无效", request_id.clone()))?;
+    let (database, claims) = authenticate(&state, request.headers(), &request_id).await?;
+    database
+        .validate_sync_project(claims.sub, &claims.role, project_id)
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let object_store = sync_object_store(&state, &request_id)?;
+
+    let mut stream = request.into_body().into_data_stream();
+    let mut bytes = BytesMut::with_capacity(content_length);
+    let mut hasher = Sha256::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|_| ApiError::invalid("payload 请求体读取失败", request_id.clone()))?;
+        if bytes.len().saturating_add(chunk.len()) > content_length
+            || bytes.len().saturating_add(chunk.len()) > MAX_PAYLOAD_BYTES
+        {
+            return Err(ApiError::invalid(
+                "payload 大小与 Content-Length 不一致",
+                request_id,
+            ));
+        }
+        hasher.update(&chunk);
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() != content_length {
+        return Err(ApiError::invalid(
+            "payload 大小与 Content-Length 不一致",
+            request_id,
+        ));
+    }
+    if hex::encode(hasher.finalize()) != content_hash {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CONTENT_HASH_MISMATCH",
+            "payload 的 SHA-256 与路径不一致",
+            false,
+            request_id,
+        ));
+    }
+    let payload = object_store
+        .put_payload(
+            claims.sub,
+            project_id,
+            &content_hash,
+            &media_type,
+            bytes.freeze(),
+        )
+        .await
+        .map_err(|error| map_object_store(&error, request_id.clone()))?;
+    database
+        .register_payload(
+            claims.sub,
+            &claims.role,
+            project_id,
+            &StoredPayload {
+                content_hash: payload.content_hash,
+                bucket: payload.bucket,
+                object_key: payload.key,
+                size: i64::try_from(payload.size)
+                    .map_err(|_| ApiError::internal(request_id.clone()))?,
+                media_type: payload.media_type,
+            },
+        )
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    Response::builder()
+        .status(StatusCode::CREATED)
+        .body(Body::empty())
+        .map_err(|_| ApiError::internal(request_id))
+}
+
+pub async fn get_payload(
+    State(state): State<AppState>,
+    ApiPath((project_id, content_hash)): ApiPath<(Uuid, String)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_content_hash(&content_hash, &request_id)?;
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    database
+        .validate_sync_project(claims.sub, &claims.role, project_id)
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let download = sync_object_store(&state, &request_id)?
+        .get_payload(claims.sub, project_id, &content_hash, range.as_deref())
+        .await
+        .map_err(|error| map_object_store(&error, request_id.clone()))?;
+    let mut response = Response::builder()
+        .status(if download.content_range.is_some() {
+            StatusCode::PARTIAL_CONTENT
+        } else {
+            StatusCode::OK
+        })
+        .header(header::CONTENT_TYPE, download.media_type)
+        .header(header::ACCEPT_RANGES, "bytes");
+    if let Some(length) = download.content_length {
+        response = response.header(header::CONTENT_LENGTH, length);
+    }
+    if let Some(content_range) = download.content_range {
+        response = response.header(header::CONTENT_RANGE, content_range);
+    }
+    response
+        .body(Body::from_stream(ReaderStream::new(
+            download.body.into_async_read(),
+        )))
+        .map_err(|_| ApiError::internal(request_id))
+}
+
+pub async fn bootstrap(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<BootstrapRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let limit = valid_limit(request.limit, 200, 1000, &request_id)?;
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let signer = state
+        .cursor
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+    let page_claims = request
+        .page_token
+        .as_deref()
+        .map(|cursor| {
+            verify_cursor(
+                signer,
+                cursor,
+                CursorKind::Bootstrap,
+                project_id,
+                claims.sub,
+                &request_id,
+            )
+        })
+        .transpose()?;
+    let page = database
+        .bootstrap_page(
+            claims.sub,
+            &claims.role,
+            claims.device_id,
+            project_id,
+            page_claims.as_ref().map(|claims| claims.generation),
+            page_claims.as_ref().map(|claims| claims.change_sequence),
+            page_claims.as_ref().map_or(0, |claims| claims.offset),
+            limit,
+        )
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let next_offset = page_claims.as_ref().map_or(0, |claims| claims.offset)
+        + i64::try_from(page.records.len()).map_err(|_| ApiError::internal(request_id.clone()))?;
+    let next_page_token = page
+        .has_more
+        .then(|| {
+            signer.sign(cursor_claims(
+                CursorKind::Bootstrap,
+                project_id,
+                claims.sub,
+                page.generation,
+                page.snapshot_sequence,
+                next_offset,
+            ))
+        })
+        .transpose()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let cursor = (!page.has_more)
+        .then(|| {
+            signer.sign(cursor_claims(
+                CursorKind::Pull,
+                project_id,
+                claims.sub,
+                page.generation,
+                page.snapshot_sequence,
+                0,
+            ))
+        })
+        .transpose()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    Ok(Json(serde_json::json!({
+        "generation": page.generation,
+        "items": page.records.iter().map(sync_record_json).collect::<Vec<_>>(),
+        "hasMore": page.has_more,
+        "nextPageToken": next_page_token,
+        "cursor": cursor
+    })))
+}
+
+pub async fn pull(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<PullRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let limit = valid_limit(request.limit, 200, 1000, &request_id)?;
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let signer = state
+        .cursor
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+    let cursor = verify_cursor(
+        signer,
+        &request.cursor,
+        CursorKind::Pull,
+        project_id,
+        claims.sub,
+        &request_id,
+    )?;
+    let page = database
+        .pull_page(
+            claims.sub,
+            &claims.role,
+            claims.device_id,
+            project_id,
+            cursor.generation,
+            cursor.change_sequence,
+            limit,
+        )
+        .await
+        .map_err(|error| match error {
+            PersistenceError::NotFound => ApiError::cursor_invalid(request_id.clone()),
+            other => map_project_error(other, request_id.clone()),
+        })?;
+    let next_cursor = signer
+        .sign(cursor_claims(
+            CursorKind::Pull,
+            project_id,
+            claims.sub,
+            page.generation,
+            page.next_sequence,
+            0,
+        ))
+        .map_err(|_| ApiError::internal(request_id))?;
+    Ok(Json(serde_json::json!({
+        "generation": page.generation,
+        "changes": page.records.iter().map(sync_record_json).collect::<Vec<_>>(),
+        "nextCursor": next_cursor,
+        "hasMore": page.has_more
+    })))
+}
+
+pub async fn push(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiLimitedJson(request): ApiLimitedJson<PushRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    if request.generation <= 0
+        || request.request_id.trim().is_empty()
+        || request.request_id.len() > 128
+        || request
+            .objects
+            .len()
+            .saturating_add(request.tombstones.len())
+            > 100
+    {
+        return Err(ApiError::invalid("push 请求字段或批量大小无效", request_id));
+    }
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let mut revisions = Vec::with_capacity(request.objects.len() + request.tombstones.len());
+    for object in &request.objects {
+        validate_push_item(
+            object.kind,
+            &object.id,
+            object.schema_version,
+            object.revision,
+            object.base_revision,
+            &object.content_hash,
+            object.device_id,
+            claims.device_id,
+            &request_id,
+        )?;
+        revisions.push(NewSyncRevision {
+            kind: object.kind,
+            id: object.id.clone(),
+            schema_version: Some(object.schema_version),
+            base_revision: object.base_revision,
+            content_hash: Some(object.content_hash.clone()),
+            changed_at: object.updated_at,
+            tombstone: false,
+        });
+    }
+    for tombstone in &request.tombstones {
+        validate_revision_fields(
+            tombstone.kind,
+            &tombstone.id,
+            tombstone.revision,
+            tombstone.base_revision,
+            tombstone.device_id,
+            claims.device_id,
+            &request_id,
+        )?;
+        revisions.push(NewSyncRevision {
+            kind: tombstone.kind,
+            id: tombstone.id.clone(),
+            schema_version: None,
+            base_revision: tombstone.base_revision,
+            content_hash: None,
+            changed_at: tombstone.deleted_at,
+            tombstone: true,
+        });
+    }
+    let canonical_request = serde_json::to_vec(&request)
+        .map_err(|_| ApiError::invalid("push 请求无法规范化", request_id.clone()))?;
+    let request_hash = hex::encode(Sha256::digest(canonical_request));
+    let response = database
+        .push(
+            claims.sub,
+            &claims.role,
+            claims.device_id,
+            project_id,
+            request.generation,
+            &request.request_id,
+            &request_hash,
+            &revisions,
+        )
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok(Json(response))
 }
 
 pub async fn login(
@@ -900,6 +1364,229 @@ where
         .map_err(|_| AuthError::Password)?
 }
 
+fn sync_object_store<'a>(
+    state: &'a AppState,
+    request_id: &str,
+) -> Result<&'a tasktips_object_store::ObjectStore, ApiError> {
+    state
+        .object_store
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable(request_id.to_owned()))
+}
+
+fn map_object_store(error: &ObjectStoreError, request_id: String) -> ApiError {
+    match error {
+        ObjectStoreError::NotFound => payload_not_found(request_id),
+        ObjectStoreError::HashMismatch => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CONTENT_HASH_MISMATCH",
+            "payload 的 SHA-256 校验失败",
+            false,
+            request_id,
+        ),
+        ObjectStoreError::Backend => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "STORAGE_UNAVAILABLE",
+            "对象存储暂时不可用",
+            true,
+            request_id,
+        ),
+    }
+}
+
+fn payload_not_found(request_id: String) -> ApiError {
+    ApiError::new(
+        StatusCode::NOT_FOUND,
+        "PAYLOAD_NOT_FOUND",
+        "payload 不存在",
+        false,
+        request_id,
+    )
+}
+
+fn validate_content_hash(content_hash: &str, request_id: &str) -> Result<(), ApiError> {
+    if content_hash.len() != 64
+        || !content_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ApiError::invalid(
+            "contentHash 必须是小写 SHA-256 十六进制字符串",
+            request_id.to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn valid_limit(
+    value: Option<i64>,
+    default: i64,
+    maximum: i64,
+    request_id: &str,
+) -> Result<i64, ApiError> {
+    let value = value.unwrap_or(default);
+    if !(1..=maximum).contains(&value) {
+        return Err(ApiError::invalid("分页 limit 无效", request_id.to_owned()));
+    }
+    Ok(value)
+}
+
+fn cursor_claims(
+    kind: CursorKind,
+    project_id: Uuid,
+    owner_user_id: Uuid,
+    generation: i64,
+    change_sequence: i64,
+    offset: i64,
+) -> CursorClaims {
+    CursorClaims {
+        schema_version: 1,
+        kind,
+        project_id,
+        owner_user_id,
+        generation,
+        change_sequence,
+        offset,
+        issued_at: 0,
+    }
+}
+
+fn verify_cursor(
+    signer: &crate::cursor::CursorSigner,
+    cursor: &str,
+    kind: CursorKind,
+    project_id: Uuid,
+    owner_user_id: Uuid,
+    request_id: &str,
+) -> Result<CursorClaims, ApiError> {
+    let claims = signer
+        .verify(cursor)
+        .map_err(|_| ApiError::cursor_invalid(request_id.to_owned()))?;
+    if claims.kind != kind
+        || claims.project_id != project_id
+        || claims.owner_user_id != owner_user_id
+        || claims.generation <= 0
+        || claims.change_sequence < 0
+        || claims.offset < 0
+    {
+        return Err(ApiError::cursor_invalid(request_id.to_owned()));
+    }
+    Ok(claims)
+}
+
+fn sync_record_json(record: &SyncRecord) -> serde_json::Value {
+    if record.tombstone {
+        serde_json::json!({
+            "type": "tombstone",
+            "kind": record.kind,
+            "id": record.id,
+            "revision": record.revision,
+            "baseRevision": record.base_revision,
+            "deletedAt": record.changed_at,
+            "deviceId": record.device_id,
+            "changeSequence": record.change_sequence
+        })
+    } else {
+        serde_json::json!({
+            "type": "object",
+            "kind": record.kind,
+            "id": record.id,
+            "schemaVersion": record.schema_version,
+            "revision": record.revision,
+            "baseRevision": record.base_revision,
+            "contentHash": record.content_hash,
+            "updatedAt": record.changed_at,
+            "deviceId": record.device_id,
+            "changeSequence": record.change_sequence
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_push_item(
+    kind: ObjectKind,
+    id: &str,
+    schema_version: i32,
+    revision: i64,
+    base_revision: Option<i64>,
+    content_hash: &str,
+    device_id: Uuid,
+    authenticated_device_id: Uuid,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    if schema_version <= 0 {
+        return Err(ApiError::invalid(
+            "schemaVersion 无效",
+            request_id.to_owned(),
+        ));
+    }
+    validate_content_hash(content_hash, request_id)?;
+    validate_revision_fields(
+        kind,
+        id,
+        revision,
+        base_revision,
+        device_id,
+        authenticated_device_id,
+        request_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_revision_fields(
+    kind: ObjectKind,
+    id: &str,
+    revision: i64,
+    base_revision: Option<i64>,
+    device_id: Uuid,
+    authenticated_device_id: Uuid,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    let expected_revision = base_revision.unwrap_or(0).checked_add(1);
+    if revision <= 0
+        || base_revision.is_some_and(|base| base <= 0)
+        || expected_revision != Some(revision)
+        || device_id != authenticated_device_id
+        || !valid_object_id(kind, id)
+    {
+        return Err(ApiError::invalid(
+            "同步对象 revision、deviceId 或 id 无效",
+            request_id.to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn valid_object_id(kind: ObjectKind, id: &str) -> bool {
+    match kind {
+        ObjectKind::Todo => {
+            id.len() == 26
+                && id.bytes().all(|byte| {
+                    matches!(
+                        byte,
+                        b'0'..=b'9'
+                            | b'A'..=b'H'
+                            | b'J'..=b'K'
+                            | b'M'..=b'N'
+                            | b'P'..=b'T'
+                            | b'V'..=b'Z'
+                    )
+                })
+        }
+        ObjectKind::Classification => id == "classification",
+        ObjectKind::Index => id == "index",
+        ObjectKind::Image => {
+            !id.is_empty()
+                && id.len() <= 255
+                && id != "."
+                && id != ".."
+                && !id
+                    .bytes()
+                    .any(|byte| byte == b'/' || byte == b'\\' || byte == 0)
+        }
+    }
+}
+
 fn valid_text<'a>(
     value: &'a str,
     max_chars: usize,
@@ -963,6 +1650,48 @@ fn map_persistence(error: PersistenceError, request_id: String) -> ApiError {
             false,
             request_id,
         ),
+        PersistenceError::ProjectMaintenance => ApiError::new(
+            StatusCode::LOCKED,
+            "PROJECT_MAINTENANCE",
+            "项目当前处于维护状态",
+            true,
+            request_id,
+        ),
+        PersistenceError::GenerationMismatch { expected, actual } => ApiError::new(
+            StatusCode::CONFLICT,
+            "GENERATION_MISMATCH",
+            "项目 generation 已变化，请重新 bootstrap",
+            false,
+            request_id,
+        )
+        .with_details(serde_json::json!({
+            "expectedGeneration": expected,
+            "actualGeneration": actual
+        })),
+        PersistenceError::BootstrapRequired => ApiError::new(
+            StatusCode::CONFLICT,
+            "CURSOR_INVALID",
+            "当前设备必须先完成 bootstrap",
+            false,
+            request_id,
+        ),
+        PersistenceError::IdempotencyConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "IDEMPOTENCY_CONFLICT",
+            "幂等键已用于不同请求",
+            false,
+            request_id,
+        ),
+        PersistenceError::PayloadNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "PAYLOAD_NOT_FOUND",
+            "payload 不存在",
+            false,
+            request_id,
+        ),
+        PersistenceError::InvalidPayload => {
+            ApiError::invalid("payload 与对象类型不兼容", request_id)
+        }
         PersistenceError::Database(database_error) => {
             drop(database_error);
             ApiError::internal(request_id)

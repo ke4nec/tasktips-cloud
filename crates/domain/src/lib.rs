@@ -62,6 +62,27 @@ impl ProjectStatus {
     }
 }
 
+impl ObjectKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Todo => "todo",
+            Self::Classification => "classification",
+            Self::Index => "index",
+            Self::Image => "image",
+        }
+    }
+
+    #[must_use]
+    pub const fn max_payload_bytes(self) -> u64 {
+        match self {
+            Self::Todo => 2 * 1024 * 1024,
+            Self::Classification | Self::Index => 5 * 1024 * 1024,
+            Self::Image => 10 * 1024 * 1024,
+        }
+    }
+}
+
 #[must_use]
 pub fn normalize_email(email: &str) -> Option<String> {
     let normalized = email.trim().to_lowercase();
@@ -92,4 +113,28 @@ pub struct ObjectIdentity {
     pub project_id: Uuid,
     pub kind: ObjectKind,
     pub object_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncObjectMetadata {
+    pub kind: ObjectKind,
+    pub id: String,
+    pub schema_version: u32,
+    pub revision: u64,
+    pub base_revision: Option<u64>,
+    pub content_hash: String,
+    pub updated_at: time::OffsetDateTime,
+    pub device_id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncTombstoneMetadata {
+    pub kind: ObjectKind,
+    pub id: String,
+    pub revision: u64,
+    pub base_revision: Option<u64>,
+    pub deleted_at: time::OffsetDateTime,
+    pub device_id: Uuid,
 }

@@ -4,6 +4,7 @@ use tasktips_api::{
     AppState, Readiness,
     auth::{AuthService, hash_password},
     build_application_router,
+    cursor::CursorSigner,
 };
 use tasktips_application::{normalize_email, valid_password};
 use tasktips_object_store::{ObjectStore, RustFsConfig};
@@ -46,8 +47,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|_| build_auth_service())
         .transpose()?;
     let object_store = build_object_store();
-    let readiness = Readiness::new(database.clone(), object_store);
-    let state = AppState::new(readiness, database, auth);
+    let readiness = Readiness::new(database.clone(), object_store.clone());
+    let mut state = AppState::new(readiness, database, auth);
+    if let Some(object_store) = object_store {
+        let cursor_secret = env::var("TASKTIPS_CURSOR_SIGNING_SECRET")?;
+        state = state.with_sync(object_store, CursorSigner::new(cursor_secret)?);
+    }
     let listener = TcpListener::bind(address).await?;
     info!(%address, "tasktips API listening");
 

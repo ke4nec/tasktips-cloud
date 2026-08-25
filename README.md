@@ -12,6 +12,8 @@ TaskTips 的独立同步服务、后台任务、管理后台和部署工程。�
 - `crates/object-store`：RustFS S3 适配层。
 - `crates/worker`：快照、恢复、清理和统计任务进程。
 - `contracts`：OpenAPI 3.1 唯一 HTTP 契约源及示例。
+- 阶段 C 同步接口要求配置 `TASKTIPS_CURSOR_SIGNING_SECRET`；payload 通过 RustFS 内容寻址存储，
+  push 前必须先完成 bootstrap。
 - `admin`：Vue 3 + TypeScript 管理后台。
 - `migrations`：SQLx migration。
 - `deploy`：容器镜像、Compose、Caddy 和配置样例。

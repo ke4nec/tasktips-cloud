@@ -17,6 +17,10 @@ tags:
     description: Personal project metadata endpoints.
   - name: Devices
     description: Personal device registration and revocation endpoints.
+  - name: Payloads
+    description: Owner-scoped immutable payload byte transfer endpoints.
+  - name: Synchronization
+    description: Bootstrap, permanent change-log pull, and CAS push endpoints.
   - name: Administration
     description: Privacy-preserving system administration metadata endpoints.
 paths:
@@ -346,6 +350,223 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+  /api/v1/projects/{projectId}/payloads/{contentHash}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ContentHash'
+    head:
+      operationId: headPayload
+      summary: Check whether verified payload bytes exist in the owner project scope
+      tags: [Payloads]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Payload metadata. No object-store key or credential is returned.
+          headers:
+            Content-Length:
+              schema:
+                type: integer
+                minimum: 0
+            Content-Type:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/PayloadNotFound'
+        '423':
+          $ref: '#/components/responses/ProjectMaintenance'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+    put:
+      operationId: putPayload
+      summary: Upload and verify immutable payload bytes
+      tags: [Payloads]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Content-Length
+          in: header
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10485760
+        - name: Content-Type
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: The verified payload is available under its content hash.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ContentHashMismatch'
+        '423':
+          $ref: '#/components/responses/ProjectMaintenance'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+    get:
+      operationId: getPayload
+      summary: Stream payload bytes, optionally using a byte range
+      tags: [Payloads]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Range
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Complete payload bytes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Requested payload byte range.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/PayloadNotFound'
+        '423':
+          $ref: '#/components/responses/ProjectMaintenance'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /api/v1/projects/{projectId}/sync/bootstrap:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: bootstrapSync
+      summary: Read all heads and tombstones from a stable change sequence
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BootstrapRequest'
+      responses:
+        '200':
+          description: A stable bootstrap page. cursor is present only on the final page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BootstrapResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/GenerationMismatch'
+        '423':
+          $ref: '#/components/responses/ProjectMaintenance'
+  /api/v1/projects/{projectId}/sync/pull:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: pullSyncChanges
+      summary: Pull permanent change-log entries after a signed cursor
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PullRequest'
+      responses:
+        '200':
+          description: Incremental object and tombstone changes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullResponse'
+        '400':
+          $ref: '#/components/responses/CursorInvalid'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/GenerationMismatch'
+        '423':
+          $ref: '#/components/responses/ProjectMaintenance'
+  /api/v1/projects/{projectId}/sync/push:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: pushSyncChanges
+      summary: Push up to 100 object and tombstone CAS changes
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushRequest'
+      responses:
+        '200':
+          description: Per-item applied, conflict, or rejected results.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          description: Generation, bootstrap, or idempotency request-level rejection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '423':
+          $ref: '#/components/responses/ProjectMaintenance'
   /api/v1/devices:
     get:
       operationId: listDevices
@@ -642,6 +863,42 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    PayloadNotFound:
+      description: The payload does not exist in the authenticated owner/project scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ContentHashMismatch:
+      description: The raw-byte SHA-256 does not match contentHash.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    CursorInvalid:
+      description: The signed cursor is invalid or belongs to another owner/project.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    GenerationMismatch:
+      description: The request belongs to another project generation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ProjectMaintenance:
+      description: The project does not currently accept sync traffic.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    StorageUnavailable:
+      description: RustFS is temporarily unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   parameters:
     ProjectId:
       name: projectId
@@ -664,6 +921,13 @@ components:
       schema:
         type: string
         format: uuid
+    ContentHash:
+      name: contentHash
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{64}$'
   schemas:
     HealthResponse:
       type: object
@@ -730,6 +994,273 @@ components:
         actualGeneration:
           type: integer
           minimum: 1
+    ObjectKind:
+      type: string
+      enum: [todo, classification, index, image]
+    BootstrapRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        pageToken:
+          type: string
+          minLength: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+    BootstrapResponse:
+      type: object
+      additionalProperties: false
+      required: [generation, items, hasMore, nextPageToken, cursor]
+      properties:
+        generation:
+          type: integer
+          minimum: 1
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncChange'
+        hasMore:
+          type: boolean
+        nextPageToken:
+          type: [string, 'null']
+        cursor:
+          type: [string, 'null']
+    PullRequest:
+      type: object
+      additionalProperties: false
+      required: [cursor]
+      properties:
+        cursor:
+          type: string
+          minLength: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+    PullResponse:
+      type: object
+      additionalProperties: false
+      required: [generation, changes, nextCursor, hasMore]
+      properties:
+        generation:
+          type: integer
+          minimum: 1
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncChange'
+        nextCursor:
+          type: string
+        hasMore:
+          type: boolean
+    SyncChange:
+      oneOf:
+        - $ref: '#/components/schemas/SyncObjectChange'
+        - $ref: '#/components/schemas/SyncTombstoneChange'
+      discriminator:
+        propertyName: type
+    SyncObjectChange:
+      type: object
+      additionalProperties: false
+      required: [type, kind, id, schemaVersion, revision, contentHash, updatedAt, deviceId, changeSequence]
+      properties:
+        type:
+          const: object
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        id:
+          type: string
+        schemaVersion:
+          type: integer
+          minimum: 1
+        revision:
+          type: integer
+          minimum: 1
+        baseRevision:
+          type: [integer, 'null']
+          minimum: 1
+        contentHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        updatedAt:
+          type: string
+          format: date-time
+        deviceId:
+          type: string
+          format: uuid
+        changeSequence:
+          type: integer
+          minimum: 1
+    SyncTombstoneChange:
+      type: object
+      additionalProperties: false
+      required: [type, kind, id, revision, deletedAt, deviceId, changeSequence]
+      properties:
+        type:
+          const: tombstone
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        id:
+          type: string
+        revision:
+          type: integer
+          minimum: 1
+        baseRevision:
+          type: [integer, 'null']
+          minimum: 1
+        deletedAt:
+          type: string
+          format: date-time
+        deviceId:
+          type: string
+          format: uuid
+        changeSequence:
+          type: integer
+          minimum: 1
+    PushRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, generation, objects, tombstones]
+      properties:
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        generation:
+          type: integer
+          minimum: 1
+        objects:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/PushObject'
+        tombstones:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/PushTombstone'
+    PushObject:
+      type: object
+      additionalProperties: false
+      required: [kind, id, schemaVersion, revision, contentHash, updatedAt, deviceId]
+      properties:
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        schemaVersion:
+          type: integer
+          minimum: 1
+        revision:
+          type: integer
+          minimum: 1
+        baseRevision:
+          type: [integer, 'null']
+          minimum: 1
+        contentHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        updatedAt:
+          type: string
+          format: date-time
+        deviceId:
+          type: string
+          format: uuid
+    PushTombstone:
+      type: object
+      additionalProperties: false
+      required: [kind, id, revision, deletedAt, deviceId]
+      properties:
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        revision:
+          type: integer
+          minimum: 1
+        baseRevision:
+          type: [integer, 'null']
+          minimum: 1
+        deletedAt:
+          type: string
+          format: date-time
+        deviceId:
+          type: string
+          format: uuid
+    PushResponse:
+      type: object
+      additionalProperties: false
+      required: [generation, results]
+      properties:
+        generation:
+          type: integer
+          minimum: 1
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PushItemResult'
+    PushItemResult:
+      oneOf:
+        - $ref: '#/components/schemas/PushAppliedResult'
+        - $ref: '#/components/schemas/PushConflictResult'
+        - $ref: '#/components/schemas/PushRejectedResult'
+      discriminator:
+        propertyName: status
+    PushAppliedResult:
+      type: object
+      additionalProperties: false
+      required: [status, kind, id, revision, changeSequence, changedAt]
+      properties:
+        status:
+          const: applied
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        id:
+          type: string
+        revision:
+          type: integer
+          minimum: 1
+        changeSequence:
+          type: integer
+          minimum: 1
+        changedAt:
+          type: string
+          format: date-time
+    PushConflictResult:
+      type: object
+      additionalProperties: false
+      required: [status, kind, id, expectedRevision, actualRevision]
+      properties:
+        status:
+          const: conflict
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        id:
+          type: string
+        expectedRevision:
+          type: [integer, 'null']
+          minimum: 1
+        actualRevision:
+          type: [integer, 'null']
+          minimum: 1
+    PushRejectedResult:
+      type: object
+      additionalProperties: false
+      required: [status, kind, id, code]
+      properties:
+        status:
+          const: rejected
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        id:
+          type: string
+        code:
+          $ref: '#/components/schemas/ErrorCode'
     LoginRequest:
       type: object
       additionalProperties: false
