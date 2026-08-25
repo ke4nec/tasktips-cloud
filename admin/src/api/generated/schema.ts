@@ -310,6 +310,105 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/projects/{projectId}/history': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    /** List immutable owner-visible revision history */
+    get: operations['listProjectHistory'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/objects/{kind}/{objectId}/history': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        kind: components['schemas']['ObjectKind'];
+        objectId: string;
+      };
+      cookie?: never;
+    };
+    /** List immutable history for one object */
+    get: operations['listObjectHistory'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/snapshots': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    /** List immutable metadata-only snapshot references */
+    get: operations['listSnapshots'];
+    put?: never;
+    /** Create an immutable snapshot of current heads */
+    post: operations['createSnapshot'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/restores': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Queue a snapshot or change-sequence restore */
+    post: operations['createRestore'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/restores/{restoreId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        restoreId: string;
+      };
+      cookie?: never;
+    };
+    /** Read restore job status */
+    get: operations['getRestore'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/devices': {
     parameters: {
       query?: never;
@@ -631,6 +730,68 @@ export interface components {
       generation: number;
       results: components['schemas']['PushItemResult'][];
     };
+    HistoryResponse: {
+      items: components['schemas']['SyncChange'][];
+      hasMore: boolean;
+      nextSequence: number;
+    };
+    Snapshot: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      projectId: string;
+      generation: number;
+      changeSequence: number;
+      manifestHash: string;
+      /** @enum {string} */
+      status: 'pending' | 'ready' | 'failed';
+      /** Format: uuid */
+      createdBy: string;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    SnapshotList: {
+      items: components['schemas']['Snapshot'][];
+    };
+    RestoreRequest:
+      | components['schemas']['RestoreSnapshotRequest']
+      | components['schemas']['RestoreSequenceRequest'];
+    RestoreSnapshotRequest: {
+      /** Format: uuid */
+      snapshotId: string;
+      reason: string;
+    };
+    RestoreSequenceRequest: {
+      targetChangeSequence: number;
+      reason: string;
+    };
+    RestoreJob: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      projectId: string;
+      /** Format: uuid */
+      requestedBy: string;
+      /** Format: uuid */
+      snapshotId?: string | null;
+      targetChangeSequence?: number | null;
+      reason: string;
+      /** @enum {string} */
+      status: 'queued' | 'running' | 'succeeded' | 'failed';
+      /** Format: uuid */
+      preRestoreSnapshotId?: string | null;
+      generationBefore?: number | null;
+      generationAfter?: number | null;
+      restoredObjects: number;
+      restoredTombstones: number;
+      errorCode?: string | null;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      startedAt?: string | null;
+      /** Format: date-time */
+      finishedAt?: string | null;
+    };
     PushItemResult:
       | components['schemas']['PushAppliedResult']
       | components['schemas']['PushConflictResult']
@@ -931,6 +1092,8 @@ export interface components {
     DeviceId: string;
     UserId: string;
     ContentHash: string;
+    AfterSequence: number;
+    Limit: number;
   };
   requestBodies: never;
   headers: never;
@@ -1520,6 +1683,175 @@ export interface operations {
         };
       };
       423: components['responses']['ProjectMaintenance'];
+    };
+  };
+  listProjectHistory: {
+    parameters: {
+      query?: {
+        afterSequence?: components['parameters']['AfterSequence'];
+        limit?: components['parameters']['Limit'];
+        kind?: components['schemas']['ObjectKind'];
+      };
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revision metadata; object payloads remain available through the payload API. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HistoryResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+    };
+  };
+  listObjectHistory: {
+    parameters: {
+      query?: {
+        afterSequence?: components['parameters']['AfterSequence'];
+        limit?: components['parameters']['Limit'];
+      };
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        kind: components['schemas']['ObjectKind'];
+        objectId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revision metadata for the requested object. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HistoryResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+    };
+  };
+  listSnapshots: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Snapshot references without manifest bodies or storage credentials. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SnapshotList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+    };
+  };
+  createSnapshot: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Snapshot manifest was verified and stored. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Snapshot'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+      423: components['responses']['ProjectMaintenance'];
+      503: components['responses']['StorageUnavailable'];
+    };
+  };
+  createRestore: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RestoreRequest'];
+      };
+    };
+    responses: {
+      /** @description Restore job queued for the worker. */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RestoreJob'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  getRestore: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        restoreId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current restore job state and counts. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RestoreJob'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
     };
   };
   listDevices: {

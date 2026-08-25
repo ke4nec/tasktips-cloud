@@ -98,6 +98,7 @@ async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
             .token,
         device_id: user_two.device_id,
     };
+    let worker_store = object_store.clone();
     let app = build_application_router(
         AppState::new(
             Readiness::unavailable(),
@@ -109,7 +110,6 @@ async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
             CursorSigner::new([9_u8; 32]).expect("cursor signer should build"),
         ),
     );
-
     let bootstrap_one = bootstrap(&app, project.id, &device_one).await;
     let bootstrap_two = bootstrap(&app, project.id, &device_two).await;
     let device_two_cursor = bootstrap_two["cursor"]
@@ -201,6 +201,76 @@ async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
         "idempotent retry must not duplicate revisions"
     );
     assert_eq!(changes.last().unwrap()["type"], "tombstone");
+
+    let (status, snapshot) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{}/snapshots", project.id),
+        &device_one.access_token,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(snapshot["manifestHash"].as_str().is_some());
+    assert!(!snapshot.to_string().contains("device-one"));
+
+    let (status, restore) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{}/restores", project.id),
+        &device_one.access_token,
+        json!({"targetChangeSequence": 2, "reason": "stage e regression"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let restore_id = Uuid::parse_str(restore["id"].as_str().unwrap()).unwrap();
+    let claimed = persistence
+        .claim_restore_job()
+        .await
+        .expect("restore should be claimed")
+        .expect("restore should be queued");
+    assert_eq!(claimed.id, restore_id);
+    let (pre_snapshot_id, owner_id, manifest_bytes) = persistence
+        .create_pre_restore_snapshot(&claimed)
+        .await
+        .expect("pre-restore snapshot should be created");
+    let manifest_hash = hex::encode(Sha256::digest(&manifest_bytes));
+    let manifest = worker_store
+        .put_manifest(
+            owner_id,
+            project.id,
+            pre_snapshot_id,
+            &manifest_hash,
+            bytes::Bytes::from(manifest_bytes),
+        )
+        .await
+        .expect("pre-restore manifest should be stored");
+    persistence
+        .mark_snapshot_ready(pre_snapshot_id, &manifest.bucket, &manifest.key)
+        .await
+        .expect("pre-restore snapshot should be finalized");
+    persistence
+        .execute_restore(restore_id)
+        .await
+        .expect("restore should complete");
+    let restored = persistence
+        .get_restore_job(user_one.user_id, "user", project.id, restore_id)
+        .await
+        .expect("restore status should be readable");
+    assert_eq!(restored.status, "succeeded");
+    assert_eq!(restored.generation_after, Some(2));
+
+    let (status, history) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{}/history", project.id),
+        &device_one.access_token,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history["items"].as_array().unwrap().len(), 4);
+    assert_generation_mismatch(&app, project.id, &device_one, &first_hash).await;
 
     let (status, error) = json_request(
         &app,

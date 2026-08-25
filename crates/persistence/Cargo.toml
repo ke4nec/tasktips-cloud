@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+hex.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 tasktips-domain = { path = "../domain" }
 thiserror.workspace = true

@@ -1,5 +1,6 @@
 use serde::Serialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::HashSet;
 use tasktips_domain::{AccountStatus, ObjectKind, UserRole};
@@ -40,6 +41,8 @@ pub enum PersistenceError {
     PayloadNotFound,
     #[error("payload is not valid for the object kind")]
     InvalidPayload,
+    #[error("restore target is invalid")]
+    InvalidRestoreTarget,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -193,6 +196,72 @@ pub struct PullPage {
     pub records: Vec<SyncRecord>,
     pub has_more: bool,
     pub next_sequence: i64,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotRecord {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub generation: i64,
+    pub change_sequence: i64,
+    pub manifest_hash: String,
+    pub status: String,
+    pub created_by: Uuid,
+    pub created_at: OffsetDateTime,
+    #[serde(skip_serializing)]
+    pub manifest_bucket: String,
+    #[serde(skip_serializing)]
+    pub manifest_key: String,
+    #[serde(skip_serializing)]
+    pub manifest: serde_json::Value,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreJobRecord {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub requested_by: Uuid,
+    pub snapshot_id: Option<Uuid>,
+    pub target_change_sequence: Option<i64>,
+    pub reason: String,
+    pub status: String,
+    pub pre_restore_snapshot_id: Option<Uuid>,
+    pub generation_before: Option<i64>,
+    pub generation_after: Option<i64>,
+    pub restored_objects: i32,
+    pub restored_tombstones: i32,
+    pub error_code: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub started_at: Option<OffsetDateTime>,
+    pub finished_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug, FromRow)]
+struct ManifestRow {
+    kind: String,
+    id: String,
+    schema_version: Option<i32>,
+    revision: i64,
+    base_revision: Option<i64>,
+    content_hash: Option<String>,
+    changed_at: OffsetDateTime,
+    device_id: Uuid,
+    tombstone: bool,
+    change_sequence: i64,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestItem {
+    kind: String,
+    id: String,
+    schema_version: Option<i32>,
+    revision: i64,
+    content_hash: Option<String>,
+    device_id: Uuid,
+    tombstone: bool,
 }
 
 #[derive(Clone)]
@@ -847,13 +916,621 @@ impl Persistence {
     /// Returns an error when the worker metadata query fails.
     pub async fn referenced_payload_keys(&self) -> Result<HashSet<String>, PersistenceError> {
         let mut tx = self.begin_worker().await?;
-        let keys = sqlx::query_scalar::<_, String>("SELECT object_key FROM payloads")
+        let keys = sqlx::query_scalar::<_, String>(
+            "SELECT object_key FROM payloads \
+             UNION ALL SELECT manifest_key FROM snapshots WHERE status = 'ready'",
+        )
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .collect();
+        tx.commit().await?;
+        Ok(keys)
+    }
+
+    /// Builds an immutable metadata-only snapshot manifest at the current project sequence.
+    /// Payload bytes are never included in the manifest.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn snapshot_manifest(
+        &self,
+        user_id: Uuid,
+        role: &str,
+        project_id: Uuid,
+        snapshot_id: Uuid,
+    ) -> Result<(i64, i64, serde_json::Value, Vec<u8>), PersistenceError> {
+        let mut tx = self.begin_user(user_id, role).await?;
+        let (generation, sequence) = require_active_project(&mut tx, project_id).await?;
+        let rows = sqlx::query_as::<_, ManifestRow>(
+            "SELECT r.kind::text AS kind, r.object_id AS id, r.schema_version, r.revision, \
+                    r.base_revision, r.content_hash::text AS content_hash, r.changed_at, \
+                    r.device_id, r.is_tombstone AS tombstone, c.sequence AS change_sequence \
+             FROM object_heads h JOIN object_revisions r ON r.id = h.revision_id \
+             JOIN change_log c ON c.revision_id = r.id AND c.project_id = r.project_id \
+             WHERE h.project_id = $1 ORDER BY h.kind, h.object_id",
+        )
+        .bind(project_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let items = rows.iter().map(manifest_item_json).collect::<Vec<_>>();
+        let manifest = json!({
+            "version": 1,
+            "snapshotId": snapshot_id,
+            "generation": generation,
+            "changeSequence": sequence,
+            "items": items
+        });
+        let bytes = serde_json::to_vec(&manifest).map_err(|_| PersistenceError::InvalidPayload)?;
+        tx.commit().await?;
+        Ok((generation, sequence, manifest, bytes))
+    }
+
+    /// Records a verified snapshot manifest after its immutable object has been written.
+    #[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
+    pub async fn record_snapshot(
+        &self,
+        user_id: Uuid,
+        role: &str,
+        project_id: Uuid,
+        snapshot_id: Uuid,
+        generation: i64,
+        change_sequence: i64,
+        manifest_hash: &str,
+        manifest_bucket: &str,
+        manifest_key: &str,
+        manifest: serde_json::Value,
+    ) -> Result<SnapshotRecord, PersistenceError> {
+        let mut tx = self.begin_user(user_id, role).await?;
+        ensure_project_visible(&mut tx, project_id).await?;
+        let snapshot = sqlx::query_as::<_, SnapshotRecord>(
+            "INSERT INTO snapshots \
+                 (id, project_id, owner_user_id, generation, change_sequence, manifest_hash, \
+                  manifest_bucket, manifest_key, manifest, created_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $3) \
+             RETURNING id, project_id, generation, change_sequence, manifest_hash, status, \
+                       created_by, created_at, manifest_bucket, manifest_key, manifest",
+        )
+        .bind(snapshot_id)
+        .bind(project_id)
+        .bind(user_id)
+        .bind(generation)
+        .bind(change_sequence)
+        .bind(manifest_hash)
+        .bind(manifest_bucket)
+        .bind(manifest_key)
+        .bind(manifest)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_conflict)?;
+        insert_audit(
+            &mut tx,
+            user_id,
+            Some(user_id),
+            "snapshot.created",
+            json!({"projectId": project_id, "snapshotId": snapshot_id, "generation": generation}),
+            "snapshot",
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(snapshot)
+    }
+
+    /// Lists metadata for owner-visible snapshots.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn list_snapshots(
+        &self,
+        user_id: Uuid,
+        role: &str,
+        project_id: Uuid,
+    ) -> Result<Vec<SnapshotRecord>, PersistenceError> {
+        let mut tx = self.begin_user(user_id, role).await?;
+        ensure_project_visible(&mut tx, project_id).await?;
+        let snapshots = sqlx::query_as::<_, SnapshotRecord>(
+            "SELECT id, project_id, generation, change_sequence, manifest_hash, status, \
+                    created_by, created_at, manifest_bucket, manifest_key, manifest \
+             FROM snapshots WHERE project_id = $1 ORDER BY created_at DESC, id DESC",
+        )
+        .bind(project_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(snapshots)
+    }
+
+    /// Lists immutable revision metadata, optionally scoped to one object.
+    #[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
+    pub async fn list_history(
+        &self,
+        user_id: Uuid,
+        role: &str,
+        project_id: Uuid,
+        kind: Option<ObjectKind>,
+        object_id: Option<&str>,
+        after_sequence: i64,
+        limit: i64,
+    ) -> Result<(Vec<SyncRecord>, bool), PersistenceError> {
+        let mut tx = self.begin_user(user_id, role).await?;
+        ensure_project_visible(&mut tx, project_id).await?;
+        let mut records = if let Some(kind) = kind {
+            sqlx::query_as::<_, SyncRecord>(
+                "SELECT r.kind::text AS kind, r.object_id AS id, r.schema_version, r.revision, \
+                        r.base_revision, r.content_hash::text AS content_hash, r.changed_at, \
+                        r.device_id, r.is_tombstone AS tombstone, c.sequence AS change_sequence \
+                 FROM change_log c JOIN object_revisions r ON r.id = c.revision_id \
+                 WHERE c.project_id = $1 AND c.sequence > $2 AND r.kind = $3::sync_object_kind \
+                   AND r.object_id = COALESCE($4, r.object_id) \
+                 ORDER BY c.sequence LIMIT $5",
+            )
+            .bind(project_id)
+            .bind(after_sequence)
+            .bind(kind.as_str())
+            .bind(object_id)
+            .bind(limit + 1)
+            .fetch_all(&mut *tx)
+            .await?
+        } else {
+            sqlx::query_as::<_, SyncRecord>(
+                "SELECT r.kind::text AS kind, r.object_id AS id, r.schema_version, r.revision, \
+                        r.base_revision, r.content_hash::text AS content_hash, r.changed_at, \
+                        r.device_id, r.is_tombstone AS tombstone, c.sequence AS change_sequence \
+                 FROM change_log c JOIN object_revisions r ON r.id = c.revision_id \
+                 WHERE c.project_id = $1 AND c.sequence > $2 \
+                 ORDER BY c.sequence LIMIT $3",
+            )
+            .bind(project_id)
+            .bind(after_sequence)
+            .bind(limit + 1)
+            .fetch_all(&mut *tx)
+            .await?
+        };
+        let has_more = i64::try_from(records.len()).unwrap_or(i64::MAX) > limit;
+        if has_more {
+            records.pop();
+        }
+        tx.commit().await?;
+        Ok((records, has_more))
+    }
+
+    /// Enqueues one snapshot- or sequence-targeted restore request.
+    #[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
+    pub async fn enqueue_restore(
+        &self,
+        user_id: Uuid,
+        role: &str,
+        project_id: Uuid,
+        snapshot_id: Option<Uuid>,
+        target_change_sequence: Option<i64>,
+        reason: &str,
+        request_id: &str,
+    ) -> Result<RestoreJobRecord, PersistenceError> {
+        if snapshot_id.is_none() == target_change_sequence.is_none()
+            || target_change_sequence.is_some_and(|sequence| sequence < 0)
+        {
+            return Err(PersistenceError::InvalidRestoreTarget);
+        }
+        let mut tx = self.begin_user(user_id, role).await?;
+        let (_, current_sequence) = require_active_project_for_update(&mut tx, project_id).await?;
+        if target_change_sequence.is_some_and(|sequence| sequence > current_sequence) {
+            return Err(PersistenceError::InvalidRestoreTarget);
+        }
+        if let Some(snapshot_id) = snapshot_id {
+            let belongs = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM snapshots WHERE id = $1 AND project_id = $2 AND status = 'ready')",
+            )
+            .bind(snapshot_id)
+            .bind(project_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !belongs {
+                return Err(PersistenceError::NotFound);
+            }
+        }
+        let job = sqlx::query_as::<_, RestoreJobRecord>(
+            "INSERT INTO restore_jobs \
+                 (id, project_id, owner_user_id, requested_by, snapshot_id, target_change_sequence, \
+                  reason, request_id) \
+             VALUES ($1, $2, $3, $3, $4, $5, $6, $7) \
+             RETURNING id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
+                       status, pre_restore_snapshot_id, generation_before, generation_after, \
+                       restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at",
+        )
+        .bind(Uuid::new_v4())
+        .bind(project_id)
+        .bind(user_id)
+        .bind(snapshot_id)
+        .bind(target_change_sequence)
+        .bind(reason)
+        .bind(request_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        insert_audit(
+            &mut tx,
+            user_id,
+            Some(user_id),
+            "restore.requested",
+            json!({"projectId": project_id, "restoreId": job.id}),
+            request_id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(job)
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn get_restore_job(
+        &self,
+        user_id: Uuid,
+        role: &str,
+        project_id: Uuid,
+        restore_id: Uuid,
+    ) -> Result<RestoreJobRecord, PersistenceError> {
+        let mut tx = self.begin_user(user_id, role).await?;
+        let job = sqlx::query_as::<_, RestoreJobRecord>(
+            "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
+                    status, pre_restore_snapshot_id, generation_before, generation_after, \
+                    restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
+             FROM restore_jobs WHERE id = $1 AND project_id = $2",
+        )
+        .bind(restore_id)
+        .bind(project_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(PersistenceError::NotFound)?;
+        tx.commit().await?;
+        Ok(job)
+    }
+
+    /// Claims one queued restore and puts its project into the maintenance window.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn claim_restore_job(&self) -> Result<Option<RestoreJobRecord>, PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        let Some(job) = sqlx::query_as::<_, RestoreJobRecord>(
+            "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
+                    status, pre_restore_snapshot_id, generation_before, generation_after, \
+                    restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
+             FROM restore_jobs WHERE status = 'queued' ORDER BY created_at, id \
+             FOR UPDATE SKIP LOCKED LIMIT 1",
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        let generation = sqlx::query_scalar::<_, i64>(
+            "UPDATE projects SET status = 'maintenance', updated_at = CURRENT_TIMESTAMP \
+             WHERE id = $1 AND status = 'active' RETURNING generation",
+        )
+        .bind(job.project_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(generation) = generation else {
+            sqlx::query(
+                "UPDATE restore_jobs SET status = 'failed', error_code = 'PROJECT_MAINTENANCE', \
+                 finished_at = CURRENT_TIMESTAMP WHERE id = $1",
+            )
+            .bind(job.id)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Err(PersistenceError::ProjectMaintenance);
+        };
+        let job = sqlx::query_as::<_, RestoreJobRecord>(
+            "UPDATE restore_jobs SET status = 'running', generation_before = $2, \
+                 started_at = CURRENT_TIMESTAMP WHERE id = $1 \
+             RETURNING id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
+                       status, pre_restore_snapshot_id, generation_before, generation_after, \
+                       restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at",
+        )
+        .bind(job.id)
+        .bind(generation)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(job))
+    }
+
+    /// Creates the mandatory pre-restore metadata snapshot before any head changes.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn create_pre_restore_snapshot(
+        &self,
+        job: &RestoreJobRecord,
+    ) -> Result<(Uuid, Uuid, Vec<u8>), PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        let (owner_user_id, generation, sequence) = sqlx::query_as::<_, (Uuid, i64, i64)>(
+            "SELECT owner_user_id, generation, change_seq FROM projects WHERE id = $1 FOR UPDATE",
+        )
+        .bind(job.project_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(PersistenceError::NotFound)?;
+        let rows = sqlx::query_as::<_, ManifestRow>(
+            "SELECT r.kind::text AS kind, r.object_id AS id, r.schema_version, r.revision, \
+                    r.base_revision, r.content_hash::text AS content_hash, r.changed_at, \
+                    r.device_id, r.is_tombstone AS tombstone, c.sequence AS change_sequence \
+             FROM object_heads h JOIN object_revisions r ON r.id = h.revision_id \
+             JOIN change_log c ON c.revision_id = r.id AND c.project_id = r.project_id \
+             WHERE h.project_id = $1 ORDER BY h.kind, h.object_id",
+        )
+        .bind(job.project_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let snapshot_id = Uuid::new_v4();
+        let manifest = json!({
+            "version": 1,
+            "snapshotId": snapshot_id,
+            "generation": generation,
+            "changeSequence": sequence,
+            "items": rows.iter().map(manifest_item_json).collect::<Vec<_>>()
+        });
+        let bytes = serde_json::to_vec(&manifest).map_err(|_| PersistenceError::InvalidPayload)?;
+        let manifest_hash = hex::encode(Sha256::digest(&bytes));
+        let manifest_key = format!(
+            "users/{owner_user_id}/projects/{}/snapshots/{snapshot_id}/manifest.json",
+            job.project_id
+        );
+        sqlx::query(
+            "INSERT INTO snapshots \
+                 (id, project_id, owner_user_id, generation, change_sequence, manifest_hash, \
+                  manifest_bucket, manifest_key, manifest, status, created_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, 'pending', $3)",
+        )
+        .bind(snapshot_id)
+        .bind(job.project_id)
+        .bind(owner_user_id)
+        .bind(generation)
+        .bind(sequence)
+        .bind(&manifest_hash)
+        .bind(&manifest_key)
+        .bind(&manifest)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_conflict)?;
+        sqlx::query("UPDATE restore_jobs SET pre_restore_snapshot_id = $2 WHERE id = $1")
+            .bind(job.id)
+            .bind(snapshot_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok((snapshot_id, owner_user_id, bytes))
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn mark_snapshot_ready(
+        &self,
+        snapshot_id: Uuid,
+        bucket: &str,
+        key: &str,
+    ) -> Result<(), PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        sqlx::query(
+            "UPDATE snapshots SET manifest_bucket = $2, manifest_key = $3, status = 'ready' \
+             WHERE id = $1 AND status = 'pending'",
+        )
+        .bind(snapshot_id)
+        .bind(bucket)
+        .bind(key)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn fail_restore_job(
+        &self,
+        job_id: Uuid,
+        error_code: &str,
+    ) -> Result<(), PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        sqlx::query(
+            "UPDATE restore_jobs SET status = 'failed', error_code = $2, \
+                 finished_at = CURRENT_TIMESTAMP WHERE id = $1 AND status = 'running'",
+        )
+        .bind(job_id)
+        .bind(error_code)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Applies a restore by appending revisions and advancing project generation.
+    #[allow(clippy::missing_errors_doc, clippy::too_many_lines)]
+    pub async fn execute_restore(&self, job_id: Uuid) -> Result<(), PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        let job = sqlx::query_as::<_, RestoreJobRecord>(
+            "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
+                    status, pre_restore_snapshot_id, generation_before, generation_after, \
+                    restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
+             FROM restore_jobs WHERE id = $1 FOR UPDATE",
+        )
+        .bind(job_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(PersistenceError::NotFound)?;
+        if job.status != "running" {
+            return Err(PersistenceError::Conflict);
+        }
+        let (owner_user_id, generation) = sqlx::query_as::<_, (Uuid, i64)>(
+            "SELECT owner_user_id, generation FROM projects WHERE id = $1 AND status = 'maintenance' FOR UPDATE",
+        )
+        .bind(job.project_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(PersistenceError::ProjectMaintenance)?;
+
+        let target = if let Some(snapshot_id) = job.snapshot_id {
+            let manifest = sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT manifest FROM snapshots WHERE id = $1 AND project_id = $2 AND status = 'ready'",
+            )
+            .bind(snapshot_id)
+            .bind(job.project_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(PersistenceError::NotFound)?;
+            manifest_items(&manifest)?
+        } else if let Some(sequence) = job.target_change_sequence {
+            sqlx::query_as::<_, ManifestRow>(
+                "WITH ranked AS ( \
+                     SELECT r.kind::text AS kind, r.object_id AS id, r.schema_version, r.revision, \
+                            r.base_revision, r.content_hash::text AS content_hash, r.changed_at, \
+                            r.device_id, r.is_tombstone AS tombstone, c.sequence AS change_sequence, \
+                            ROW_NUMBER() OVER (PARTITION BY r.kind, r.object_id ORDER BY c.sequence DESC) AS position \
+                     FROM object_revisions r JOIN change_log c ON c.revision_id = r.id \
+                     WHERE r.project_id = $1 AND c.sequence <= $2 \
+                 ) SELECT kind, id, schema_version, revision, base_revision, content_hash, changed_at, \
+                          device_id, tombstone, change_sequence FROM ranked WHERE position = 1",
+            )
+            .bind(job.project_id)
+            .bind(sequence)
             .fetch_all(&mut *tx)
             .await?
             .into_iter()
-            .collect();
+            .map(manifest_item_from_row)
+            .collect::<Vec<_>>()
+        } else {
+            return Err(PersistenceError::InvalidRestoreTarget);
+        };
+        let current = sqlx::query_as::<_, ManifestRow>(
+            "SELECT r.kind::text AS kind, r.object_id AS id, r.schema_version, r.revision, \
+                    r.base_revision, r.content_hash::text AS content_hash, r.changed_at, \
+                    r.device_id, r.is_tombstone AS tombstone, c.sequence AS change_sequence \
+             FROM object_heads h JOIN object_revisions r ON r.id = h.revision_id \
+             JOIN change_log c ON c.revision_id = r.id AND c.project_id = r.project_id \
+             WHERE h.project_id = $1",
+        )
+        .bind(job.project_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut target = target;
+        for row in &current {
+            if !target
+                .iter()
+                .any(|item| item.kind == row.kind && item.id == row.id)
+            {
+                target.push(ManifestItem {
+                    kind: row.kind.clone(),
+                    id: row.id.clone(),
+                    schema_version: None,
+                    revision: 0,
+                    content_hash: None,
+                    device_id: row.device_id,
+                    tombstone: true,
+                });
+            }
+        }
+        let mut restored_objects = 0_i32;
+        let mut restored_tombstones = 0_i32;
+        for item in target {
+            let existing = current
+                .iter()
+                .find(|row| row.kind == item.kind && row.id == item.id);
+            if existing.is_some_and(|row| same_manifest_state(row, &item)) {
+                continue;
+            }
+            let actual_revision = existing.map_or(0, |row| row.revision);
+            let payload_id = if item.tombstone {
+                None
+            } else {
+                let hash = item
+                    .content_hash
+                    .as_deref()
+                    .ok_or(PersistenceError::InvalidPayload)?;
+                Some(
+                    sqlx::query_scalar::<_, Uuid>(
+                        "SELECT id FROM payloads WHERE project_id = $1 AND content_hash = $2",
+                    )
+                    .bind(job.project_id)
+                    .bind(hash)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or(PersistenceError::PayloadNotFound)?,
+                )
+            };
+            let next_sequence = sqlx::query_scalar::<_, i64>(
+                "UPDATE projects SET change_seq = change_seq + 1, updated_at = CURRENT_TIMESTAMP \
+                 WHERE id = $1 RETURNING change_seq",
+            )
+            .bind(job.project_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            let revision_id = sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO object_revisions \
+                 (project_id, owner_user_id, kind, object_id, revision, base_revision, schema_version, \
+                  payload_id, content_hash, is_tombstone, changed_at, device_id) \
+                 VALUES ($1, $2, $3::sync_object_kind, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, $11) \
+                 RETURNING id",
+            )
+            .bind(job.project_id)
+            .bind(owner_user_id)
+            .bind(&item.kind)
+            .bind(&item.id)
+            .bind(actual_revision + 1)
+            .bind((actual_revision > 0).then_some(actual_revision))
+            .bind(item.schema_version)
+            .bind(payload_id)
+            .bind(item.content_hash.as_deref())
+            .bind(item.tombstone)
+            .bind(item.device_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO object_heads (project_id, owner_user_id, kind, object_id, revision, revision_id) \
+                 VALUES ($1, $2, $3::sync_object_kind, $4, $5, $6) \
+                 ON CONFLICT (project_id, kind, object_id) DO UPDATE SET revision = EXCLUDED.revision, revision_id = EXCLUDED.revision_id",
+            )
+            .bind(job.project_id)
+            .bind(owner_user_id)
+            .bind(&item.kind)
+            .bind(&item.id)
+            .bind(actual_revision + 1)
+            .bind(revision_id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO change_log (project_id, owner_user_id, sequence, revision_id) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(job.project_id)
+            .bind(owner_user_id)
+            .bind(next_sequence)
+            .bind(revision_id)
+            .execute(&mut *tx)
+            .await?;
+            if item.tombstone {
+                restored_tombstones += 1;
+            } else {
+                restored_objects += 1;
+            }
+        }
+        let generation_after = generation + 1;
+        sqlx::query(
+            "UPDATE projects SET generation = $2, status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        )
+        .bind(job.project_id)
+        .bind(generation_after)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE restore_jobs SET status = 'succeeded', generation_after = $2, restored_objects = $3, \
+                 restored_tombstones = $4, finished_at = CURRENT_TIMESTAMP WHERE id = $1",
+        )
+        .bind(job_id)
+        .bind(generation_after)
+        .bind(restored_objects)
+        .bind(restored_tombstones)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events (actor_user_id, subject_user_id, project_id, action, metadata) \
+             VALUES ($1, $1, $2, 'restore.completed', $3)",
+        )
+        .bind(job.requested_by)
+        .bind(job.project_id)
+        .bind(json!({"restoreId": job_id, "generation": generation_after, "objects": restored_objects, "tombstones": restored_tombstones}))
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
-        Ok(keys)
+        Ok(())
     }
 
     /// Returns a stable page of heads as they existed at `snapshot_sequence`.
@@ -1556,6 +2233,69 @@ async fn project_state(
         return Err(PersistenceError::ProjectMaintenance);
     }
     Ok((generation, sequence))
+}
+
+async fn ensure_project_visible(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+) -> Result<(), PersistenceError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND status NOT IN ('disabled', 'deleting'))",
+    )
+    .bind(project_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if exists {
+        Ok(())
+    } else {
+        Err(PersistenceError::NotFound)
+    }
+}
+
+fn manifest_item_json(row: &ManifestRow) -> serde_json::Value {
+    json!({
+        "kind": row.kind,
+        "id": row.id,
+        "schemaVersion": row.schema_version,
+        "revision": row.revision,
+        "baseRevision": row.base_revision,
+        "contentHash": row.content_hash,
+        "changedAt": row.changed_at,
+        "deviceId": row.device_id,
+        "tombstone": row.tombstone,
+        "changeSequence": row.change_sequence
+    })
+}
+
+fn manifest_item_from_row(row: ManifestRow) -> ManifestItem {
+    ManifestItem {
+        kind: row.kind,
+        id: row.id,
+        schema_version: row.schema_version,
+        revision: row.revision,
+        content_hash: row.content_hash,
+        device_id: row.device_id,
+        tombstone: row.tombstone,
+    }
+}
+
+fn manifest_items(manifest: &serde_json::Value) -> Result<Vec<ManifestItem>, PersistenceError> {
+    serde_json::from_value(
+        manifest
+            .get("items")
+            .cloned()
+            .ok_or(PersistenceError::InvalidPayload)?,
+    )
+    .map_err(|_| PersistenceError::InvalidPayload)
+}
+
+fn same_manifest_state(row: &ManifestRow, item: &ManifestItem) -> bool {
+    row.kind == item.kind
+        && row.id == item.id
+        && row.tombstone == item.tombstone
+        && row.schema_version == item.schema_version
+        && row.content_hash == item.content_hash
+        && row.revision == item.revision
 }
 
 fn valid_media_type(kind: ObjectKind, media_type: &str) -> bool {

@@ -185,6 +185,60 @@ impl ObjectStore {
         })
     }
 
+    /// Writes a verified, immutable snapshot manifest. A manifest contains metadata references
+    /// only; payload bytes remain in their existing content-addressed objects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a hash mismatch before writing or a backend error without exposing object keys.
+    pub async fn put_manifest(
+        &self,
+        owner_user_id: Uuid,
+        project_id: Uuid,
+        snapshot_id: Uuid,
+        expected_hash: &str,
+        bytes: Bytes,
+    ) -> Result<PayloadInfo, ObjectStoreError> {
+        let actual_hash = hex::encode(Sha256::digest(&bytes));
+        if actual_hash != expected_hash {
+            return Err(ObjectStoreError::HashMismatch);
+        }
+        let key = manifest_key(owner_user_id, project_id, snapshot_id);
+        if let Some(existing) = self.head_key(&key).await? {
+            if existing.0 != u64::try_from(bytes.len()).map_err(|_| ObjectStoreError::Backend)? {
+                return Err(ObjectStoreError::Backend);
+            }
+            return Ok(PayloadInfo {
+                bucket: self.bucket.clone(),
+                key,
+                content_hash: expected_hash.to_owned(),
+                size: existing.0,
+                media_type: existing.1.unwrap_or_else(|| "application/json".to_owned()),
+            });
+        }
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .content_length(i64::try_from(bytes.len()).map_err(|_| ObjectStoreError::Backend)?)
+            .content_type("application/json")
+            .body(ByteStream::from(bytes))
+            .send()
+            .await
+            .map_err(|_| ObjectStoreError::Backend)?;
+        let (size, media_type) = self
+            .head_key(&key)
+            .await?
+            .ok_or(ObjectStoreError::Backend)?;
+        Ok(PayloadInfo {
+            bucket: self.bucket.clone(),
+            key,
+            content_hash: expected_hash.to_owned(),
+            size,
+            media_type: media_type.unwrap_or_else(|| "application/json".to_owned()),
+        })
+    }
+
     /// # Errors
     ///
     /// Returns a backend error when `RustFS` cannot answer the metadata request.
@@ -272,13 +326,14 @@ impl ObjectStore {
                 let Some(key) = object.key() else {
                     continue;
                 };
-                let managed_payload =
-                    key.contains("/payloads/sha256/") || key.contains("/uploads/");
+                let managed_object = key.contains("/payloads/sha256/")
+                    || key.contains("/uploads/")
+                    || key.contains("/snapshots/");
                 let old_enough = object
                     .last_modified()
                     .and_then(|modified| OffsetDateTime::from_unix_timestamp(modified.secs()).ok())
                     .is_some_and(|modified| modified < older_than);
-                if managed_payload && old_enough && !referenced_keys.contains(key) {
+                if managed_object && old_enough && !referenced_keys.contains(key) {
                     self.client
                         .delete_object()
                         .bucket(&self.bucket)
@@ -327,6 +382,11 @@ impl ObjectStore {
 pub fn payload_key(owner_user_id: Uuid, project_id: Uuid, content_hash: &str) -> String {
     let shard = content_hash.get(..2).unwrap_or(content_hash);
     format!("users/{owner_user_id}/projects/{project_id}/payloads/sha256/{shard}/{content_hash}")
+}
+
+#[must_use]
+pub fn manifest_key(owner_user_id: Uuid, project_id: Uuid, snapshot_id: Uuid) -> String {
+    format!("users/{owner_user_id}/projects/{project_id}/snapshots/{snapshot_id}/manifest.json")
 }
 
 #[cfg(test)]

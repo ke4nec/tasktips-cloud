@@ -2,7 +2,7 @@ use axum::{
     Json,
     body::{Body, to_bytes},
     extract::{
-        FromRequest, FromRequestParts, Path, Request, State,
+        FromRequest, FromRequestParts, Path, Query, Request, State,
         rejection::{JsonRejection, PathRejection},
     },
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
@@ -11,6 +11,7 @@ use axum::{
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use tasktips_application::{AccountStatus, ObjectKind, normalize_email, valid_password};
@@ -376,6 +377,23 @@ pub struct PushTombstone {
     base_revision: Option<i64>,
     deleted_at: time::OffsetDateTime,
     device_id: Uuid,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryQuery {
+    after_sequence: Option<i64>,
+    limit: Option<i64>,
+    kind: Option<String>,
+    object_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RestoreRequest {
+    snapshot_id: Option<Uuid>,
+    target_change_sequence: Option<i64>,
+    reason: String,
 }
 
 pub async fn head_payload(
@@ -748,6 +766,176 @@ pub async fn push(
         .await
         .map_err(|error| map_project_error(error, request_id))?;
     Ok(Json(response))
+}
+
+pub async fn history(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    history_response(&state, project_id, headers, query, None, None).await
+}
+
+pub async fn object_history(
+    State(state): State<AppState>,
+    ApiPath((project_id, kind, object_id)): ApiPath<(Uuid, String, String)>,
+    headers: HeaderMap,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let kind = parse_object_kind(&kind)
+        .ok_or_else(|| ApiError::invalid("对象类型无效", request_id(&headers)))?;
+    history_response(
+        &state,
+        project_id,
+        headers,
+        query,
+        Some(kind),
+        Some(object_id),
+    )
+    .await
+}
+
+async fn history_response(
+    state: &AppState,
+    project_id: Uuid,
+    headers: HeaderMap,
+    query: HistoryQuery,
+    kind: Option<ObjectKind>,
+    object_id: Option<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    if query.after_sequence.unwrap_or(0) < 0 {
+        return Err(ApiError::invalid("afterSequence 无效", request_id));
+    }
+    if query.object_id.is_some() && kind.is_none() {
+        return Err(ApiError::invalid("history 查询条件无效", request_id));
+    }
+    let query_kind = match query.kind.as_deref() {
+        Some(value) => Some(
+            parse_object_kind(value)
+                .ok_or_else(|| ApiError::invalid("对象类型无效", request_id.clone()))?,
+        ),
+        None => None,
+    };
+    let limit = valid_limit(query.limit, 200, 1000, &request_id)?;
+    let (database, claims) = authenticate(state, &headers, &request_id).await?;
+    let (records, has_more) = database
+        .list_history(
+            claims.sub,
+            &claims.role,
+            project_id,
+            kind.or(query_kind),
+            object_id.as_deref().or(query.object_id.as_deref()),
+            query.after_sequence.unwrap_or(0),
+            limit,
+        )
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let next_sequence = records
+        .last()
+        .map_or(query.after_sequence.unwrap_or(0), |record| {
+            record.change_sequence
+        });
+    Ok(Json(json!({
+        "items": records.iter().map(sync_record_json).collect::<Vec<_>>(),
+        "hasMore": has_more,
+        "nextSequence": next_sequence
+    })))
+}
+
+pub async fn create_snapshot(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<tasktips_persistence::SnapshotRecord>), ApiError> {
+    let request_id = request_id(&headers);
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let snapshot_id = Uuid::new_v4();
+    let (generation, sequence, manifest, bytes) = database
+        .snapshot_manifest(claims.sub, &claims.role, project_id, snapshot_id)
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let hash = hex::encode(Sha256::digest(&bytes));
+    let object_store = sync_object_store(&state, &request_id)?;
+    let stored = object_store
+        .put_manifest(
+            claims.sub,
+            project_id,
+            snapshot_id,
+            &hash,
+            bytes::Bytes::from(bytes),
+        )
+        .await
+        .map_err(|error| map_object_store(&error, request_id.clone()))?;
+    let snapshot = database
+        .record_snapshot(
+            claims.sub,
+            &claims.role,
+            project_id,
+            snapshot_id,
+            generation,
+            sequence,
+            &hash,
+            &stored.bucket,
+            &stored.key,
+            manifest,
+        )
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok((StatusCode::CREATED, Json(snapshot)))
+}
+
+pub async fn list_snapshots(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let snapshots = database
+        .list_snapshots(claims.sub, &claims.role, project_id)
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok(Json(json!({"items": snapshots})))
+}
+
+pub async fn create_restore(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<RestoreRequest>,
+) -> Result<(StatusCode, Json<tasktips_persistence::RestoreJobRecord>), ApiError> {
+    let request_id = request_id(&headers);
+    let reason = valid_text(&request.reason, 512, "恢复原因无效", &request_id)?;
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let job = database
+        .enqueue_restore(
+            claims.sub,
+            &claims.role,
+            project_id,
+            request.snapshot_id,
+            request.target_change_sequence,
+            reason,
+            &request_id,
+        )
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+pub async fn get_restore(
+    State(state): State<AppState>,
+    ApiPath((project_id, restore_id)): ApiPath<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<Json<tasktips_persistence::RestoreJobRecord>, ApiError> {
+    let request_id = request_id(&headers);
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let job = database
+        .get_restore_job(claims.sub, &claims.role, project_id, restore_id)
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok(Json(job))
 }
 
 pub async fn login(
@@ -1587,6 +1775,16 @@ fn valid_object_id(kind: ObjectKind, id: &str) -> bool {
     }
 }
 
+fn parse_object_kind(value: &str) -> Option<ObjectKind> {
+    match value {
+        "todo" => Some(ObjectKind::Todo),
+        "classification" => Some(ObjectKind::Classification),
+        "index" => Some(ObjectKind::Index),
+        "image" => Some(ObjectKind::Image),
+        _ => None,
+    }
+}
+
 fn valid_text<'a>(
     value: &'a str,
     max_chars: usize,
@@ -1692,6 +1890,7 @@ fn map_persistence(error: PersistenceError, request_id: String) -> ApiError {
         PersistenceError::InvalidPayload => {
             ApiError::invalid("payload 与对象类型不兼容", request_id)
         }
+        PersistenceError::InvalidRestoreTarget => ApiError::invalid("恢复目标无效", request_id),
         PersistenceError::Database(database_error) => {
             drop(database_error);
             ApiError::internal(request_id)

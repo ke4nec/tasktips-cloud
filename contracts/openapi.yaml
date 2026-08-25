@@ -567,6 +567,180 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '423':
           $ref: '#/components/responses/ProjectMaintenance'
+  /api/v1/projects/{projectId}/history:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listProjectHistory
+      summary: List immutable owner-visible revision history
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AfterSequence'
+        - $ref: '#/components/parameters/Limit'
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ObjectKind'
+      responses:
+        '200':
+          description: Revision metadata; object payloads remain available through the payload API.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+  /api/v1/projects/{projectId}/objects/{kind}/{objectId}/history:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: kind
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ObjectKind'
+      - name: objectId
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+    get:
+      operationId: listObjectHistory
+      summary: List immutable history for one object
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AfterSequence'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Revision metadata for the requested object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+  /api/v1/projects/{projectId}/snapshots:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listSnapshots
+      summary: List immutable metadata-only snapshot references
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Snapshot references without manifest bodies or storage credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    post:
+      operationId: createSnapshot
+      summary: Create an immutable snapshot of current heads
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Snapshot manifest was verified and stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '423':
+          $ref: '#/components/responses/ProjectMaintenance'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+  /api/v1/projects/{projectId}/restores:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: createRestore
+      summary: Queue a snapshot or change-sequence restore
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreRequest'
+      responses:
+        '202':
+          description: Restore job queued for the worker.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreJob'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/projects/{projectId}/restores/{restoreId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: restoreId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getRestore
+      summary: Read restore job status
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current restore job state and counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/devices:
     get:
       operationId: listDevices
@@ -928,6 +1102,23 @@ components:
       schema:
         type: string
         pattern: '^[0-9a-f]{64}$'
+    AfterSequence:
+      name: afterSequence
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 200
   schemas:
     HealthResponse:
       type: object
@@ -1204,6 +1395,139 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PushItemResult'
+    HistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [items, hasMore, nextSequence]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncChange'
+        hasMore:
+          type: boolean
+        nextSequence:
+          type: integer
+          minimum: 0
+    Snapshot:
+      type: object
+      additionalProperties: false
+      required: [id, projectId, generation, changeSequence, manifestHash, status, createdBy, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        generation:
+          type: integer
+          minimum: 1
+        changeSequence:
+          type: integer
+          minimum: 0
+        manifestHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        status:
+          type: string
+          enum: [pending, ready, failed]
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    SnapshotList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Snapshot'
+    RestoreRequest:
+      type: object
+      additionalProperties: false
+      oneOf:
+        - $ref: '#/components/schemas/RestoreSnapshotRequest'
+        - $ref: '#/components/schemas/RestoreSequenceRequest'
+    RestoreSnapshotRequest:
+      type: object
+      additionalProperties: false
+      required: [snapshotId, reason]
+      properties:
+        snapshotId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+    RestoreSequenceRequest:
+      type: object
+      additionalProperties: false
+      required: [targetChangeSequence, reason]
+      properties:
+        targetChangeSequence:
+          type: integer
+          minimum: 0
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+    RestoreJob:
+      type: object
+      additionalProperties: false
+      required: [id, projectId, requestedBy, reason, status, restoredObjects, restoredTombstones, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        requestedBy:
+          type: string
+          format: uuid
+        snapshotId:
+          type: [string, 'null']
+          format: uuid
+        targetChangeSequence:
+          type: [integer, 'null']
+          minimum: 0
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed]
+        preRestoreSnapshotId:
+          type: [string, 'null']
+          format: uuid
+        generationBefore:
+          type: [integer, 'null']
+          minimum: 1
+        generationAfter:
+          type: [integer, 'null']
+          minimum: 1
+        restoredObjects:
+          type: integer
+          minimum: 0
+        restoredTombstones:
+          type: integer
+          minimum: 0
+        errorCode:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        finishedAt:
+          type: [string, 'null']
+          format: date-time
     PushItemResult:
       oneOf:
         - $ref: '#/components/schemas/PushAppliedResult'

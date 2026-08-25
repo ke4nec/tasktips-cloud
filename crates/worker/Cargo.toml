@@ -9,6 +9,9 @@ license.workspace = true
 tasktips-application = { path = "../application" }
 tasktips-object-store = { path = "../object-store" }
 tasktips-persistence = { path = "../persistence" }
+bytes.workspace = true
+hex.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 time.workspace = true
 tracing.workspace = true

@@ -25,10 +25,11 @@ use auth::AuthService;
 use cursor::CursorSigner;
 use routes::{
     activate_invitation, admin_list_devices, admin_list_projects, admin_list_users, bootstrap,
-    change_password, create_invitation, create_project, current_user, disable_account,
-    disable_project, enable_account, get_payload, get_project, head_payload, list_devices,
-    list_projects, login, logout, pull, push, put_payload, refresh, register_device,
-    rename_project, revoke_device, update_device,
+    change_password, create_invitation, create_project, create_restore, create_snapshot,
+    current_user, disable_account, disable_project, enable_account, get_payload, get_project,
+    get_restore, head_payload, history, list_devices, list_projects, list_snapshots, login, logout,
+    object_history, pull, push, put_payload, refresh, register_device, rename_project,
+    revoke_device, update_device,
 };
 
 #[derive(Clone, Default)]
@@ -173,6 +174,23 @@ pub fn build_application_router(state: AppState) -> Router {
         )
         .route("/api/v1/projects/{projectId}/sync/pull", post(pull))
         .route("/api/v1/projects/{projectId}/sync/push", post(push))
+        .route("/api/v1/projects/{projectId}/history", get(history))
+        .route(
+            "/api/v1/projects/{projectId}/objects/{kind}/{objectId}/history",
+            get(object_history),
+        )
+        .route(
+            "/api/v1/projects/{projectId}/snapshots",
+            get(list_snapshots).post(create_snapshot),
+        )
+        .route(
+            "/api/v1/projects/{projectId}/restores",
+            post(create_restore),
+        )
+        .route(
+            "/api/v1/projects/{projectId}/restores/{restoreId}",
+            get(get_restore),
+        )
         .route("/api/v1/devices", get(list_devices))
         .route("/api/v1/devices/register", post(register_device))
         .route("/api/v1/devices/{deviceId}", patch(update_device))

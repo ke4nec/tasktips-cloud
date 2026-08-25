@@ -1,3 +1,5 @@
+use bytes::Bytes;
+use sha2::{Digest, Sha256};
 use std::{env, time::Duration};
 use tasktips_object_store::{ObjectStore, RustFsConfig};
 use tasktips_persistence::Persistence;
@@ -31,10 +33,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse::<u64>()?;
     let mut cleanup_interval = interval(Duration::from_secs(interval_seconds.max(60)));
     cleanup_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut restore_interval = interval(Duration::from_secs(5));
+    restore_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     info!("tasktips worker started");
     loop {
         tokio::select! {
+            _ = restore_interval.tick() => {
+                if let Err(error) = process_restore_jobs(&persistence, &object_store).await {
+                    warn!(error = %error, "restore job processing failed");
+                }
+            }
             _ = cleanup_interval.tick() => {
                 if let Err(error) = cleanup_orphans(&persistence, &object_store).await {
                     warn!(error = %error, "payload orphan cleanup failed");
@@ -47,6 +56,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     info!("tasktips worker stopped");
+    Ok(())
+}
+
+async fn process_restore_jobs(
+    persistence: &Persistence,
+    object_store: &ObjectStore,
+) -> Result<(), Box<dyn std::error::Error>> {
+    while let Some(job) = persistence.claim_restore_job().await? {
+        let prepared = persistence.create_pre_restore_snapshot(&job).await;
+        let (snapshot_id, owner_user_id, bytes) = match prepared {
+            Ok(value) => value,
+            Err(error) => {
+                persistence
+                    .fail_restore_job(job.id, "PRE_RESTORE_SNAPSHOT_FAILED")
+                    .await?;
+                return Err(error.into());
+            }
+        };
+        let hash = hex::encode(Sha256::digest(&bytes));
+        let manifest = object_store
+            .put_manifest(
+                owner_user_id,
+                job.project_id,
+                snapshot_id,
+                &hash,
+                Bytes::from(bytes),
+            )
+            .await;
+        let manifest = match manifest {
+            Ok(value) => value,
+            Err(error) => {
+                persistence
+                    .fail_restore_job(job.id, "PRE_RESTORE_MANIFEST_FAILED")
+                    .await?;
+                return Err(error.into());
+            }
+        };
+        persistence
+            .mark_snapshot_ready(snapshot_id, &manifest.bucket, &manifest.key)
+            .await?;
+        if let Err(error) = persistence.execute_restore(job.id).await {
+            persistence
+                .fail_restore_job(job.id, "RESTORE_FAILED")
+                .await?;
+            return Err(error.into());
+        }
+    }
     Ok(())
 }
 
