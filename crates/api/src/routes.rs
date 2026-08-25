@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
+use std::time::Instant;
 use tasktips_application::{AccountStatus, ObjectKind, normalize_email, valid_password};
 use tasktips_object_store::ObjectStoreError;
 use tasktips_persistence::{
@@ -54,6 +55,10 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    fn code(&self) -> &'static str {
+        self.body.code
+    }
+
     fn new(
         status: StatusCode,
         code: &'static str,
@@ -396,6 +401,20 @@ pub struct RestoreRequest {
     reason: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminRestoreRequest {
+    snapshot_id: Option<Uuid>,
+    target_change_sequence: Option<i64>,
+    reason: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminRestoreQuery {
+    project_id: Option<Uuid>,
+}
+
 pub async fn head_payload(
     State(state): State<AppState>,
     ApiPath((project_id, content_hash)): ApiPath<(Uuid, String)>,
@@ -687,6 +706,7 @@ pub async fn pull(
     })))
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn push(
     State(state): State<AppState>,
     ApiPath(project_id): ApiPath<Uuid>,
@@ -706,6 +726,7 @@ pub async fn push(
         return Err(ApiError::invalid("push 请求字段或批量大小无效", request_id));
     }
     let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let started = Instant::now();
     let mut revisions = Vec::with_capacity(request.objects.len() + request.tombstones.len());
     for object in &request.objects {
         validate_push_item(
@@ -752,7 +773,7 @@ pub async fn push(
     let canonical_request = serde_json::to_vec(&request)
         .map_err(|_| ApiError::invalid("push 请求无法规范化", request_id.clone()))?;
     let request_hash = hex::encode(Sha256::digest(canonical_request));
-    let response = database
+    let push_result = database
         .push(
             claims.sub,
             &claims.role,
@@ -763,9 +784,65 @@ pub async fn push(
             &request_hash,
             &revisions,
         )
-        .await
-        .map_err(|error| map_project_error(error, request_id))?;
-    Ok(Json(response))
+        .await;
+    match push_result {
+        Ok(response) => {
+            let item_count = response
+                .get("results")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len);
+            let status = if response
+                .get("results")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|items| items.iter().any(|item| item["status"] == "conflict"))
+            {
+                "conflict"
+            } else {
+                "succeeded"
+            };
+            let _ = database
+                .record_sync_attempt(
+                    claims.sub,
+                    &claims.role,
+                    &tasktips_persistence::SyncAttemptRecord {
+                        id: Uuid::new_v4(),
+                        owner_user_id: claims.sub,
+                        project_id,
+                        device_id: Some(claims.device_id),
+                        operation: "push".to_owned(),
+                        status: status.to_owned(),
+                        error_code: None,
+                        item_count: i32::try_from(item_count).unwrap_or(i32::MAX),
+                        latency_ms: i32::try_from(started.elapsed().as_millis()).ok(),
+                        created_at: time::OffsetDateTime::now_utc(),
+                    },
+                )
+                .await;
+            Ok(Json(response))
+        }
+        Err(error) => {
+            let api_error = map_project_error(error, request_id);
+            let _ = database
+                .record_sync_attempt(
+                    claims.sub,
+                    &claims.role,
+                    &tasktips_persistence::SyncAttemptRecord {
+                        id: Uuid::new_v4(),
+                        owner_user_id: claims.sub,
+                        project_id,
+                        device_id: Some(claims.device_id),
+                        operation: "push".to_owned(),
+                        status: "failed".to_owned(),
+                        error_code: Some(api_error.code().to_owned()),
+                        item_count: 0,
+                        latency_ms: i32::try_from(started.elapsed().as_millis()).ok(),
+                        created_at: time::OffsetDateTime::now_utc(),
+                    },
+                )
+                .await;
+            Err(api_error)
+        }
+    }
 }
 
 pub async fn history(
@@ -1387,6 +1464,107 @@ pub async fn admin_list_devices(
         .await
         .map_err(|error| map_persistence(error, request_id))?;
     Ok(Json(serde_json::json!({"items": devices})))
+}
+
+pub async fn admin_overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<tasktips_persistence::AdminOverview>, ApiError> {
+    let request_id = request_id(&headers);
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let overview = database
+        .admin_overview(claims.sub)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(overview))
+}
+
+pub async fn admin_history_metadata(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let limit = valid_limit(query.limit, 200, 1000, &request_id)?;
+    let after_sequence = query.after_sequence.unwrap_or(0);
+    if after_sequence < 0 {
+        return Err(ApiError::invalid("afterSequence 无效", request_id));
+    }
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let (items, has_more) = database
+        .admin_history_metadata(claims.sub, project_id, after_sequence, limit)
+        .await
+        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let next_sequence = items
+        .last()
+        .map_or(after_sequence, |item| item.change_sequence);
+    Ok(Json(
+        json!({"items": items, "hasMore": has_more, "nextSequence": next_sequence}),
+    ))
+}
+
+pub async fn admin_restore_jobs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminRestoreQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let jobs = database
+        .admin_list_restore_jobs(claims.sub, query.project_id)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(json!({"items": jobs})))
+}
+
+pub async fn admin_create_restore(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<AdminRestoreRequest>,
+) -> Result<(StatusCode, Json<tasktips_persistence::RestoreJobRecord>), ApiError> {
+    let request_id = request_id(&headers);
+    let reason = valid_text(&request.reason, 512, "恢复原因无效", &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let job = database
+        .admin_enqueue_restore(
+            claims.sub,
+            project_id,
+            request.snapshot_id,
+            request.target_change_sequence,
+            reason,
+            &request_id,
+        )
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+pub async fn admin_sync_attempts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let attempts = database
+        .admin_list_sync_attempts(claims.sub)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(json!({"items": attempts})))
+}
+
+pub async fn admin_audit_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let events = database
+        .admin_list_audit_events(claims.sub)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(json!({"items": events})))
 }
 
 pub async fn disable_account(

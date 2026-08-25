@@ -8,22 +8,38 @@ import {
   User,
 } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
-import { onMounted } from 'vue';
+import { onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import { healthLabelKey, useHealthStore } from '@/stores/health';
+import { useAuthStore } from '@/stores/auth';
 
 const route = useRoute();
+const router = useRouter();
 const { t } = useI18n();
 const health = useHealthStore();
+const auth = useAuthStore();
 const { state, isLive } = storeToRefs(health);
 
-onMounted(() => health.check());
+onMounted(async () => {
+  await auth.restore();
+  await health.check();
+});
+
+watch(
+  () => [auth.ready, auth.authenticated, route.path] as const,
+  ([ready, authenticated, path]) => {
+    if (ready && !authenticated && path !== '/login') void router.replace('/login');
+    if (ready && authenticated && path === '/login') void router.replace('/');
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
-  <el-container class="app-shell">
+  <router-view v-if="route.path === '/login'" />
+  <el-container v-else-if="auth.authenticated" class="app-shell">
     <el-header class="topbar">
       <strong>{{ t('app.name') }}</strong>
       <el-tag :type="isLive ? 'success' : 'info'" effect="plain" size="small">
@@ -66,4 +82,5 @@ onMounted(() => health.check());
       </el-main>
     </el-container>
   </el-container>
+  <main v-else class="auth-loading"><el-skeleton :rows="3" animated /></main>
 </template>

@@ -867,6 +867,143 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+  /api/v1/admin/overview:
+    get:
+      operationId: adminOverview
+      summary: Read privacy-preserving operational counts
+      description: Never returns payload content, content hashes, object keys, download URLs, or credentials.
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Operational counts for the service.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOverview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/projects/{projectId}/history-metadata:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: adminProjectHistory
+      summary: List project revision metadata without payload references
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AfterSequence'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Object kind, ID, revision, device, time, and tombstone state only.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminHistoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/admin/projects/{projectId}/restores:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: adminCreateRestore
+      summary: Queue a restore on behalf of a project owner
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreRequest'
+      responses:
+        '202':
+          description: Restore job queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreJob'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/admin/restores:
+    get:
+      operationId: adminListRestores
+      summary: List restore jobs and counts
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Restore job metadata without manifest bodies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreJobList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/sync-attempts:
+    get:
+      operationId: adminSyncAttempts
+      summary: List synchronization diagnostics
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Operation status, latency, and error codes only.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncAttemptList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/audit-events:
+    get:
+      operationId: adminAuditEvents
+      summary: List audit metadata
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Audit events without payload data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/admin/users:
     get:
       operationId: adminListUsers
@@ -1855,3 +1992,156 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AdminUser'
+    AdminOverview:
+      type: object
+      additionalProperties: false
+      required: [users, activeUsers, projects, devices, revisions, tombstones, payloadBytes, queuedRestores]
+      properties:
+        users:
+          type: integer
+          minimum: 0
+        activeUsers:
+          type: integer
+          minimum: 0
+        projects:
+          type: integer
+          minimum: 0
+        devices:
+          type: integer
+          minimum: 0
+        revisions:
+          type: integer
+          minimum: 0
+        tombstones:
+          type: integer
+          minimum: 0
+        payloadBytes:
+          type: integer
+          minimum: 0
+        queuedRestores:
+          type: integer
+          minimum: 0
+    AdminHistoryItem:
+      type: object
+      additionalProperties: false
+      required: [kind, objectId, revision, changedAt, deviceId, tombstone, changeSequence]
+      properties:
+        kind:
+          $ref: '#/components/schemas/ObjectKind'
+        objectId:
+          type: string
+        revision:
+          type: integer
+          minimum: 1
+        changedAt:
+          type: string
+          format: date-time
+        deviceId:
+          type: string
+          format: uuid
+        tombstone:
+          type: boolean
+        changeSequence:
+          type: integer
+          minimum: 1
+    AdminHistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [items, hasMore, nextSequence]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminHistoryItem'
+        hasMore:
+          type: boolean
+        nextSequence:
+          type: integer
+          minimum: 0
+    RestoreJobList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RestoreJob'
+    SyncAttempt:
+      type: object
+      additionalProperties: false
+      required: [id, ownerUserId, projectId, operation, status, itemCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ownerUserId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        deviceId:
+          type: [string, 'null']
+          format: uuid
+        operation:
+          type: string
+          enum: [bootstrap, pull, push]
+        status:
+          type: string
+          enum: [succeeded, conflict, rejected, failed]
+        errorCode:
+          type: [string, 'null']
+        itemCount:
+          type: integer
+          minimum: 0
+        latencyMs:
+          type: [integer, 'null']
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+    SyncAttemptList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncAttempt'
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      required: [id, action, metadata, createdAt]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        actorUserId:
+          type: [string, 'null']
+          format: uuid
+        subjectUserId:
+          type: [string, 'null']
+          format: uuid
+        projectId:
+          type: [string, 'null']
+          format: uuid
+        action:
+          type: string
+        metadata:
+          type: object
+        requestId:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+    AuditEventList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'

@@ -24,12 +24,13 @@ use tower_http::{
 use auth::AuthService;
 use cursor::CursorSigner;
 use routes::{
-    activate_invitation, admin_list_devices, admin_list_projects, admin_list_users, bootstrap,
-    change_password, create_invitation, create_project, create_restore, create_snapshot,
-    current_user, disable_account, disable_project, enable_account, get_payload, get_project,
-    get_restore, head_payload, history, list_devices, list_projects, list_snapshots, login, logout,
-    object_history, pull, push, put_payload, refresh, register_device, rename_project,
-    revoke_device, update_device,
+    activate_invitation, admin_audit_events, admin_create_restore, admin_history_metadata,
+    admin_list_devices, admin_list_projects, admin_list_users, admin_overview, admin_restore_jobs,
+    admin_sync_attempts, bootstrap, change_password, create_invitation, create_project,
+    create_restore, create_snapshot, current_user, disable_account, disable_project,
+    enable_account, get_payload, get_project, get_restore, head_payload, history, list_devices,
+    list_projects, list_snapshots, login, logout, object_history, pull, push, put_payload, refresh,
+    register_device, rename_project, revoke_device, update_device,
 };
 
 #[derive(Clone, Default)]
@@ -140,6 +141,7 @@ pub fn build_router(readiness: Readiness) -> Router {
     build_application_router(AppState::unavailable(readiness))
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn build_application_router(state: AppState) -> Router {
     Router::new()
         .route("/health/live", get(liveness))
@@ -210,6 +212,18 @@ pub fn build_application_router(state: AppState) -> Router {
             "/api/v1/admin/users/{userId}/devices",
             get(admin_list_devices),
         )
+        .route("/api/v1/admin/overview", get(admin_overview))
+        .route(
+            "/api/v1/admin/projects/{projectId}/history-metadata",
+            get(admin_history_metadata),
+        )
+        .route(
+            "/api/v1/admin/projects/{projectId}/restores",
+            post(admin_create_restore),
+        )
+        .route("/api/v1/admin/restores", get(admin_restore_jobs))
+        .route("/api/v1/admin/sync-attempts", get(admin_sync_attempts))
+        .route("/api/v1/admin/audit-events", get(admin_audit_events))
         .fallback(not_found)
         .with_state(state)
         .layer(

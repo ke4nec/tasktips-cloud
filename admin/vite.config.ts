@@ -19,6 +19,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/health': apiProxyTarget,
+      '/api': apiProxyTarget,
     },
   },
   test: {

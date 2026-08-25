@@ -240,6 +240,31 @@ async fn assert_admin_http_boundary(
         assert!(!serialized.contains("downloadUrl"));
         assert!(!serialized.contains("credential"));
     }
+
+    let (status, overview) = json_request(
+        app,
+        "GET",
+        "/api/v1/admin/overview",
+        Some(&admin.access_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "overview response: {overview}");
+    assert!(overview.get("payloadBytes").is_some());
+    assert!(!overview.to_string().contains("objectKey"));
+    for path in [
+        "/api/v1/admin/sync-attempts",
+        "/api/v1/admin/audit-events",
+        "/api/v1/admin/restores",
+    ] {
+        let (status, metadata) =
+            json_request(app, "GET", path, Some(&admin.access_token), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let serialized = metadata.to_string();
+        assert!(!serialized.contains("contentHash"));
+        assert!(!serialized.contains("objectKey"));
+        assert!(!serialized.contains("downloadUrl"));
+    }
 }
 
 async fn assert_refresh_http_reuse(app: &Router, user_one: &Tokens) {

@@ -498,6 +498,115 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/admin/overview': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read privacy-preserving operational counts
+     * @description Never returns payload content, content hashes, object keys, download URLs, or credentials.
+     */
+    get: operations['adminOverview'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/projects/{projectId}/history-metadata': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    /** List project revision metadata without payload references */
+    get: operations['adminProjectHistory'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/projects/{projectId}/restores': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Queue a restore on behalf of a project owner */
+    post: operations['adminCreateRestore'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/restores': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List restore jobs and counts */
+    get: operations['adminListRestores'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/sync-attempts': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List synchronization diagnostics */
+    get: operations['adminSyncAttempts'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/audit-events': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List audit metadata */
+    get: operations['adminAuditEvents'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/admin/users': {
     parameters: {
       query?: never;
@@ -957,6 +1066,74 @@ export interface components {
     };
     AdminUserList: {
       items: components['schemas']['AdminUser'][];
+    };
+    AdminOverview: {
+      users: number;
+      activeUsers: number;
+      projects: number;
+      devices: number;
+      revisions: number;
+      tombstones: number;
+      payloadBytes: number;
+      queuedRestores: number;
+    };
+    AdminHistoryItem: {
+      kind: components['schemas']['ObjectKind'];
+      objectId: string;
+      revision: number;
+      /** Format: date-time */
+      changedAt: string;
+      /** Format: uuid */
+      deviceId: string;
+      tombstone: boolean;
+      changeSequence: number;
+    };
+    AdminHistoryResponse: {
+      items: components['schemas']['AdminHistoryItem'][];
+      hasMore: boolean;
+      nextSequence: number;
+    };
+    RestoreJobList: {
+      items: components['schemas']['RestoreJob'][];
+    };
+    SyncAttempt: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      ownerUserId: string;
+      /** Format: uuid */
+      projectId: string;
+      /** Format: uuid */
+      deviceId?: string | null;
+      /** @enum {string} */
+      operation: 'bootstrap' | 'pull' | 'push';
+      /** @enum {string} */
+      status: 'succeeded' | 'conflict' | 'rejected' | 'failed';
+      errorCode?: string | null;
+      itemCount: number;
+      latencyMs?: number | null;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    SyncAttemptList: {
+      items: components['schemas']['SyncAttempt'][];
+    };
+    AuditEvent: {
+      id: number;
+      /** Format: uuid */
+      actorUserId?: string | null;
+      /** Format: uuid */
+      subjectUserId?: string | null;
+      /** Format: uuid */
+      projectId?: string | null;
+      action: string;
+      metadata: Record<string, never>;
+      requestId?: string | null;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    AuditEventList: {
+      items: components['schemas']['AuditEvent'][];
     };
   };
   responses: {
@@ -1985,6 +2162,155 @@ export interface operations {
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
       409: components['responses']['Conflict'];
+    };
+  };
+  adminOverview: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Operational counts for the service. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminOverview'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminProjectHistory: {
+    parameters: {
+      query?: {
+        afterSequence?: components['parameters']['AfterSequence'];
+        limit?: components['parameters']['Limit'];
+      };
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Object kind, ID, revision, device, time, and tombstone state only. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminHistoryResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+    };
+  };
+  adminCreateRestore: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RestoreRequest'];
+      };
+    };
+    responses: {
+      /** @description Restore job queued. */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RestoreJob'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  adminListRestores: {
+    parameters: {
+      query?: {
+        projectId?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Restore job metadata without manifest bodies. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RestoreJobList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminSyncAttempts: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Operation status, latency, and error codes only. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SyncAttemptList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminAuditEvents: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Audit events without payload data. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AuditEventList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
     };
   };
   adminListUsers: {

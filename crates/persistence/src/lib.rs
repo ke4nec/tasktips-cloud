@@ -238,6 +238,71 @@ pub struct RestoreJobRecord {
     pub finished_at: Option<OffsetDateTime>,
 }
 
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminHistoryRecord {
+    pub kind: String,
+    pub object_id: String,
+    pub revision: i64,
+    pub changed_at: OffsetDateTime,
+    pub device_id: Uuid,
+    pub tombstone: bool,
+    pub change_sequence: i64,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncAttemptRecord {
+    pub id: Uuid,
+    pub owner_user_id: Uuid,
+    pub project_id: Uuid,
+    pub device_id: Option<Uuid>,
+    pub operation: String,
+    pub status: String,
+    pub error_code: Option<String>,
+    pub item_count: i32,
+    pub latency_ms: Option<i32>,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEventRecord {
+    pub id: i64,
+    pub actor_user_id: Option<Uuid>,
+    pub subject_user_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub action: String,
+    pub metadata: serde_json::Value,
+    pub request_id: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminOverview {
+    pub users: i64,
+    pub active_users: i64,
+    pub projects: i64,
+    pub devices: i64,
+    pub revisions: i64,
+    pub tombstones: i64,
+    pub payload_bytes: i64,
+    pub queued_restores: i64,
+}
+
+#[derive(FromRow)]
+struct AdminOverviewRow {
+    users: i64,
+    active_users: i64,
+    projects: i64,
+    devices: i64,
+    revisions: i64,
+    tombstones: i64,
+    payload_bytes: i64,
+    queued_restores: i64,
+}
+
 #[derive(Clone, Debug, FromRow)]
 struct ManifestRow {
     kind: String,
@@ -2069,6 +2134,231 @@ impl Persistence {
         .await?;
         tx.commit().await?;
         Ok(devices)
+    }
+
+    /// Returns operational counts only; no payload body, hash, or storage key is selected.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_overview(
+        &self,
+        actor_user_id: Uuid,
+    ) -> Result<AdminOverview, PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let overview = sqlx::query_as::<_, AdminOverviewRow>(
+            "SELECT \
+                (SELECT count(*) FROM admin_user_metadata) AS users, \
+                (SELECT count(*) FROM admin_user_metadata WHERE status = 'active') AS active_users, \
+                (SELECT count(*) FROM admin_project_metadata) AS projects, \
+                (SELECT count(*) FROM admin_device_metadata) AS devices, \
+                (SELECT count(*) FROM object_revisions) AS revisions, \
+                (SELECT count(*) FROM object_revisions WHERE is_tombstone) AS tombstones, \
+                (SELECT COALESCE(sum(size_bytes), 0)::bigint FROM payloads) AS payload_bytes, \
+                (SELECT count(*) FROM restore_jobs WHERE status IN ('queued', 'running')) AS queued_restores",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(AdminOverview {
+            users: overview.users,
+            active_users: overview.active_users,
+            projects: overview.projects,
+            devices: overview.devices,
+            revisions: overview.revisions,
+            tombstones: overview.tombstones,
+            payload_bytes: overview.payload_bytes,
+            queued_restores: overview.queued_restores,
+        })
+    }
+
+    /// Lists project history metadata without selecting content hashes or payload references.
+    #[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
+    pub async fn admin_history_metadata(
+        &self,
+        actor_user_id: Uuid,
+        project_id: Uuid,
+        after_sequence: i64,
+        limit: i64,
+    ) -> Result<(Vec<AdminHistoryRecord>, bool), PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let mut rows = sqlx::query_as::<_, AdminHistoryRecord>(
+            "SELECT r.kind::text AS kind, r.object_id, r.revision, r.changed_at, r.device_id, \
+                    r.is_tombstone AS tombstone, c.sequence AS change_sequence \
+             FROM change_log c JOIN object_revisions r ON r.id = c.revision_id \
+             WHERE c.project_id = $1 AND c.sequence > $2 ORDER BY c.sequence LIMIT $3",
+        )
+        .bind(project_id)
+        .bind(after_sequence)
+        .bind(limit + 1)
+        .fetch_all(&mut *tx)
+        .await?;
+        let has_more = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
+        if has_more {
+            rows.pop();
+        }
+        tx.commit().await?;
+        Ok((rows, has_more))
+    }
+
+    /// Lists restore job metadata for operational monitoring.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_list_restore_jobs(
+        &self,
+        actor_user_id: Uuid,
+        project_id: Option<Uuid>,
+    ) -> Result<Vec<RestoreJobRecord>, PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let jobs = sqlx::query_as::<_, RestoreJobRecord>(
+            "SELECT id, project_id, requested_by, snapshot_id, target_change_sequence, reason, \
+                    status, pre_restore_snapshot_id, generation_before, generation_after, \
+                    restored_objects, restored_tombstones, error_code, created_at, started_at, finished_at \
+             FROM restore_jobs WHERE project_id = COALESCE($1, project_id) \
+             ORDER BY created_at DESC, id DESC LIMIT 200",
+        )
+        .bind(project_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(jobs)
+    }
+
+    /// Queues an owner-scoped restore on behalf of an administrator without exposing payloads.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_enqueue_restore(
+        &self,
+        actor_user_id: Uuid,
+        project_id: Uuid,
+        snapshot_id: Option<Uuid>,
+        target_change_sequence: Option<i64>,
+        reason: &str,
+        request_id: &str,
+    ) -> Result<RestoreJobRecord, PersistenceError> {
+        if snapshot_id.is_none() == target_change_sequence.is_none()
+            || target_change_sequence.is_some_and(|sequence| sequence < 0)
+        {
+            return Err(PersistenceError::InvalidRestoreTarget);
+        }
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let (owner_user_id, current_sequence, status) = sqlx::query_as::<_, (Uuid, i64, String)>(
+            "SELECT owner_user_id, change_seq, status::text FROM projects WHERE id = $1 FOR UPDATE",
+        )
+        .bind(project_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(PersistenceError::NotFound)?;
+        if status != "active"
+            || target_change_sequence.is_some_and(|sequence| sequence > current_sequence)
+        {
+            return Err(PersistenceError::InvalidRestoreTarget);
+        }
+        if let Some(snapshot_id) = snapshot_id {
+            let exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM snapshots WHERE id = $1 AND project_id = $2 AND status = 'ready')",
+            )
+            .bind(snapshot_id)
+            .bind(project_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !exists {
+                return Err(PersistenceError::NotFound);
+            }
+        }
+        let job = sqlx::query_as::<_, RestoreJobRecord>(
+            "INSERT INTO restore_jobs \
+                 (id, project_id, owner_user_id, requested_by, snapshot_id, target_change_sequence, reason, request_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             RETURNING id, project_id, requested_by, snapshot_id, target_change_sequence, reason, status, \
+                       pre_restore_snapshot_id, generation_before, generation_after, restored_objects, \
+                       restored_tombstones, error_code, created_at, started_at, finished_at",
+        )
+        .bind(Uuid::new_v4())
+        .bind(project_id)
+        .bind(owner_user_id)
+        .bind(actor_user_id)
+        .bind(snapshot_id)
+        .bind(target_change_sequence)
+        .bind(reason)
+        .bind(request_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        insert_audit(
+            &mut tx,
+            actor_user_id,
+            Some(owner_user_id),
+            "restore.requested",
+            json!({"projectId": project_id, "restoreId": job.id, "source": "admin"}),
+            request_id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(job)
+    }
+
+    /// Lists recent sync diagnostics without payload data.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_list_sync_attempts(
+        &self,
+        actor_user_id: Uuid,
+    ) -> Result<Vec<SyncAttemptRecord>, PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let attempts = sqlx::query_as::<_, SyncAttemptRecord>(
+            "SELECT id, owner_user_id, project_id, device_id, operation, status, error_code, \
+                    item_count, latency_ms, created_at FROM sync_attempts \
+             ORDER BY created_at DESC, id DESC LIMIT 200",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(attempts)
+    }
+
+    /// Lists recent audit metadata. Audit metadata is never populated from payload bodies.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_list_audit_events(
+        &self,
+        actor_user_id: Uuid,
+    ) -> Result<Vec<AuditEventRecord>, PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let events = sqlx::query_as::<_, AuditEventRecord>(
+            "SELECT id, actor_user_id, subject_user_id, project_id, action, metadata, request_id, created_at \
+             FROM audit_events ORDER BY created_at DESC, id DESC LIMIT 200",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(events)
+    }
+
+    /// Records an owner-scoped sync diagnostic without payload content.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn record_sync_attempt(
+        &self,
+        user_id: Uuid,
+        role: &str,
+        attempt: &SyncAttemptRecord,
+    ) -> Result<(), PersistenceError> {
+        let mut tx = self.begin_user(user_id, role).await?;
+        sqlx::query(
+            "INSERT INTO sync_attempts (id, owner_user_id, project_id, device_id, operation, status, \
+                 error_code, item_count, latency_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(attempt.id)
+        .bind(user_id)
+        .bind(attempt.project_id)
+        .bind(attempt.device_id)
+        .bind(&attempt.operation)
+        .bind(&attempt.status)
+        .bind(&attempt.error_code)
+        .bind(attempt.item_count)
+        .bind(attempt.latency_ms)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// # Errors

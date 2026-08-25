@@ -22,6 +22,7 @@ describe('ApiClient', () => {
       objectStore: null,
     });
     expect(fetcher).toHaveBeenCalledWith('/health/live', {
+      credentials: 'include',
       headers: { Accept: 'application/json' },
     });
   });

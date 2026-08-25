@@ -90,6 +90,99 @@ body {
   font-size: 14px;
 }
 
+.data-section {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 18px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #dfe3e8;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+}
+
+.page-header p {
+  margin: 8px 0 0;
+  color: #616871;
+  font-size: 14px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.metric-card {
+  border: 1px solid #dfe3e8;
+  border-radius: 6px;
+}
+
+.metric-card span,
+.metric-card strong {
+  display: block;
+}
+
+.metric-card span {
+  color: #616871;
+  font-size: 13px;
+}
+
+.metric-card strong {
+  margin-top: 10px;
+  font-size: 26px;
+  font-weight: 650;
+}
+
+.privacy-note {
+  margin-bottom: 16px;
+}
+
+.data-table {
+  width: 100%;
+}
+
+.login-page,
+.auth-loading {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: #f6f7f9;
+}
+
+.login-card {
+  width: min(100%, 420px);
+  border: 1px solid #dfe3e8;
+  border-radius: 6px;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.login-card p {
+  margin: 8px 0 22px;
+  color: #616871;
+}
+
+.login-submit {
+  width: 100%;
+  margin-top: 8px;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #e6e8eb;
@@ -123,6 +216,28 @@ body {
   .empty-section p {
     color: #a5abb3;
   }
+
+  .page-header,
+  .page-header p,
+  .metric-card span,
+  .login-card p {
+    color: #a5abb3;
+  }
+
+  .page-header {
+    border-bottom-color: #30343a;
+  }
+
+  .metric-card,
+  .login-card {
+    border-color: #30343a;
+    background: #1d2024;
+  }
+
+  .login-page,
+  .auth-loading {
+    background: #15171a;
+  }
 }
 
 @media (max-width: 720px) {
@@ -145,5 +260,14 @@ body {
 
   .main-content {
     padding: 18px 16px;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-header {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
