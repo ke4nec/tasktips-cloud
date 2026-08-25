@@ -35,15 +35,16 @@ cargo run -p tasktips-api
 ```
 
 默认监听 `127.0.0.1:8080`。`/health/live` 只验证进程；在 PostgreSQL 和 RustFS
-适配尚未接入启动流程前，`/health/ready` 会按设计返回未就绪。
+不可用或配置缺失时，`/health/ready` 返回未就绪，并在依赖恢复后重新探测。
 
 完整环境需要 Docker Compose：
 
 ```text
 cd deploy
 Copy-Item env.example .env
+New-Item -ItemType Directory -Force secrets
+# 将真实的 Ed25519 JWT 私钥写入 secrets/tasktips_jwt_private_key
 docker compose up --build
 ```
 
 不得把真实密码、JWT 私钥或 RustFS 凭据提交到 Git。
-

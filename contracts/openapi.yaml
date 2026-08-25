@@ -11,7 +11,22 @@ servers:
 tags:
   - name: System
     description: Process health and internal observability endpoints.
+  - name: Authentication
+    description: Account and device authentication endpoints.
 paths:
+  /openapi.yaml:
+    get:
+      operationId: getOpenApiDocument
+      summary: Download the OpenAPI document
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: The current OpenAPI document.
+          content:
+            application/yaml:
+              schema:
+                type: string
   /health/live:
     get:
       operationId: getLiveness
@@ -57,7 +72,136 @@ paths:
             application/openmetrics-text:
               schema:
                 type: string
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: Authenticate a device
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Access and refresh credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/refresh:
+    post:
+      operationId: refreshToken
+      summary: Rotate a refresh token
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Rotated access and refresh credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      summary: Revoke the current refresh token
+      tags: [Authentication]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: The refresh token was revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/invitations/activate:
+    post:
+      operationId: activateInvitation
+      summary: Activate an invited account
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationActivationRequest'
+      responses:
+        '200':
+          description: The invited account was activated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+  /api/v1/me:
+    get:
+      operationId: getCurrentUser
+      summary: Get the current account metadata
+      tags: [Authentication]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current account metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/me/password:
+    patch:
+      operationId: changePassword
+      summary: Change the current account password
+      tags: [Authentication]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+      responses:
+        '204':
+          description: The password was changed.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    InvalidRequest:
+      description: The request is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication is required or the credentials are invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   schemas:
     HealthResponse:
       type: object
@@ -77,7 +221,7 @@ components:
       required: [code, message, retryable, requestId]
       properties:
         code:
-          type: string
+          $ref: '#/components/schemas/ErrorCode'
         message:
           type: string
         retryable:
@@ -85,5 +229,115 @@ components:
         requestId:
           type: string
         details:
-          type: object
-          additionalProperties: true
+          $ref: '#/components/schemas/ErrorDetails'
+    ErrorCode:
+      type: string
+      enum:
+        - NOT_FOUND
+        - INVALID_REQUEST
+        - INTERNAL_ERROR
+        - AUTHENTICATION_REQUIRED
+        - ACCOUNT_DISABLED
+        - DEVICE_REVOKED
+        - PROJECT_NOT_FOUND
+        - PROJECT_MAINTENANCE
+        - GENERATION_MISMATCH
+        - REVISION_CONFLICT
+        - CONTENT_HASH_MISMATCH
+        - PAYLOAD_NOT_FOUND
+        - CURSOR_INVALID
+        - IDEMPOTENCY_CONFLICT
+        - RATE_LIMITED
+        - STORAGE_UNAVAILABLE
+    ErrorDetails:
+      type: object
+      additionalProperties: false
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+        actualRevision:
+          type: integer
+          minimum: 1
+        expectedGeneration:
+          type: integer
+          minimum: 1
+        actualGeneration:
+          type: integer
+          minimum: 1
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, deviceId]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+        deviceId:
+          type: string
+          format: uuid
+    RefreshTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 1
+    InvitationActivationRequest:
+      type: object
+      additionalProperties: false
+      required: [invitationToken, password, deviceId]
+      properties:
+        invitationToken:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+        deviceId:
+          type: string
+          format: uuid
+    TokenResponse:
+      type: object
+      additionalProperties: false
+      required: [accessToken, refreshToken, expiresIn]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+          minimum: 1
+    CurrentUser:
+      type: object
+      additionalProperties: false
+      required: [id, email, role, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [user, system_admin]
+        status:
+          type: string
+          enum: [active, disabled, pending, deleting]
+    PasswordChangeRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+        newPassword:
+          type: string
+          minLength: 1

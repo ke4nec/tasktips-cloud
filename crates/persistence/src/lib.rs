@@ -16,6 +16,16 @@ impl Persistence {
         Ok(Self { pool })
     }
 
+    /// Creates a pool without opening a network connection yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `SQLx` configuration error when the URL is invalid.
+    pub fn connect_lazy(database_url: &str) -> Result<Self, sqlx::Error> {
+        let pool = PgPool::connect_lazy(database_url)?;
+        Ok(Self { pool })
+    }
+
     #[must_use]
     pub const fn pool(&self) -> &PgPool {
         &self.pool
@@ -25,10 +35,13 @@ impl Persistence {
     ///
     /// Returns the `SQLx` query error when the readiness query cannot complete.
     pub async fn is_ready(&self) -> Result<bool, sqlx::Error> {
-        let value = sqlx::query_scalar::<_, i32>("SELECT 1")
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(value == 1)
+        let schema_ready = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_name = 'instance_settings')",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(schema_ready)
     }
 
     /// # Errors

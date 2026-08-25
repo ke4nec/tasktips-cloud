@@ -4,6 +4,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY migrations ./migrations
+COPY contracts ./contracts
 RUN cargo build --locked --release --package tasktips-api --package tasktips-worker
 
 FROM debian:bookworm-slim
@@ -18,4 +19,3 @@ COPY --from=builder /app/target/release/tasktips-worker /usr/local/bin/tasktips-
 USER 65532:65532
 EXPOSE 8080
 CMD ["tasktips-api"]
-

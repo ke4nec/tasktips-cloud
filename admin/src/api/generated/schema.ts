@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+  '/openapi.yaml': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Download the OpenAPI document */
+    get: operations['getOpenApiDocument'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/health/live': {
     parameters: {
       query?: never;
@@ -55,6 +72,108 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/auth/login': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Authenticate a device */
+    post: operations['login'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/auth/refresh': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Rotate a refresh token */
+    post: operations['refreshToken'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/auth/logout': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Revoke the current refresh token */
+    post: operations['logout'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/auth/invitations/activate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Activate an invited account */
+    post: operations['activateInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/me': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get the current account metadata */
+    get: operations['getCurrentUser'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/me/password': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Change the current account password */
+    patch: operations['changePassword'];
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -66,16 +185,92 @@ export interface components {
       objectStore: boolean | null;
     };
     ErrorResponse: {
-      code: string;
+      code: components['schemas']['ErrorCode'];
       message: string;
       retryable: boolean;
       requestId: string;
-      details?: {
-        [key: string]: unknown;
+      details?: components['schemas']['ErrorDetails'];
+    };
+    /** @enum {string} */
+    ErrorCode:
+      | 'NOT_FOUND'
+      | 'INVALID_REQUEST'
+      | 'INTERNAL_ERROR'
+      | 'AUTHENTICATION_REQUIRED'
+      | 'ACCOUNT_DISABLED'
+      | 'DEVICE_REVOKED'
+      | 'PROJECT_NOT_FOUND'
+      | 'PROJECT_MAINTENANCE'
+      | 'GENERATION_MISMATCH'
+      | 'REVISION_CONFLICT'
+      | 'CONTENT_HASH_MISMATCH'
+      | 'PAYLOAD_NOT_FOUND'
+      | 'CURSOR_INVALID'
+      | 'IDEMPOTENCY_CONFLICT'
+      | 'RATE_LIMITED'
+      | 'STORAGE_UNAVAILABLE';
+    ErrorDetails: {
+      expectedRevision?: number;
+      actualRevision?: number;
+      expectedGeneration?: number;
+      actualGeneration?: number;
+    };
+    LoginRequest: {
+      /** Format: email */
+      email: string;
+      password: string;
+      /** Format: uuid */
+      deviceId: string;
+    };
+    RefreshTokenRequest: {
+      refreshToken: string;
+    };
+    InvitationActivationRequest: {
+      invitationToken: string;
+      password: string;
+      /** Format: uuid */
+      deviceId: string;
+    };
+    TokenResponse: {
+      accessToken: string;
+      refreshToken: string;
+      expiresIn: number;
+    };
+    CurrentUser: {
+      /** Format: uuid */
+      id: string;
+      /** Format: email */
+      email: string;
+      /** @enum {string} */
+      role: 'user' | 'system_admin';
+      /** @enum {string} */
+      status: 'active' | 'disabled' | 'pending' | 'deleting';
+    };
+    PasswordChangeRequest: {
+      currentPassword: string;
+      newPassword: string;
+    };
+  };
+  responses: {
+    /** @description The request is invalid. */
+    InvalidRequest: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description Authentication is required or the credentials are invalid. */
+    Unauthorized: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
       };
     };
   };
-  responses: never;
   parameters: never;
   requestBodies: never;
   headers: never;
@@ -83,6 +278,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  getOpenApiDocument: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The current OpenAPI document. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/yaml': string;
+        };
+      };
+    };
+  };
   getLiveness: {
     parameters: {
       query?: never;
@@ -150,6 +365,145 @@ export interface operations {
           'application/openmetrics-text': string;
         };
       };
+    };
+  };
+  login: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['LoginRequest'];
+      };
+    };
+    responses: {
+      /** @description Access and refresh credentials. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TokenResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+    };
+  };
+  refreshToken: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RefreshTokenRequest'];
+      };
+    };
+    responses: {
+      /** @description Rotated access and refresh credentials. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TokenResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+    };
+  };
+  logout: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The refresh token was revoked. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: components['responses']['Unauthorized'];
+    };
+  };
+  activateInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['InvitationActivationRequest'];
+      };
+    };
+    responses: {
+      /** @description The invited account was activated. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TokenResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+    };
+  };
+  getCurrentUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current account metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CurrentUser'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+    };
+  };
+  changePassword: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PasswordChangeRequest'];
+      };
+    };
+    responses: {
+      /** @description The password was changed. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
     };
   };
 }

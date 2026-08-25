@@ -1,3 +1,4 @@
+import { apiClient } from './client';
 import type { components } from './generated/schema';
 
 export const healthPaths = {
@@ -8,11 +9,9 @@ export const healthPaths = {
 export type HealthResponse = components['schemas']['HealthResponse'];
 
 export async function fetchLiveness(): Promise<HealthResponse> {
-  const response = await fetch(healthPaths.live, {
-    headers: { Accept: 'application/json' },
-  });
-  if (!response.ok) {
-    throw new Error(`health check failed with status ${response.status}`);
-  }
-  return (await response.json()) as HealthResponse;
+  return apiClient.getLiveness();
+}
+
+export async function fetchReadiness(): Promise<HealthResponse> {
+  return apiClient.getReadiness();
 }

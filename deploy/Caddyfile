@@ -15,8 +15,11 @@
     reverse_proxy tasktips-api:8080
   }
 
+  handle /openapi.yaml {
+    reverse_proxy tasktips-api:8080
+  }
+
   handle {
     respond "Not Found" 404
   }
 }
-

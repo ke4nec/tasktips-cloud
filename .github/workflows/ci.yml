@@ -70,6 +70,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Validate Compose configuration
-        run: cp deploy/env.example deploy/.env && docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
+        run: |
+          mkdir -p deploy/secrets
+          printf 'ci-placeholder-key' > deploy/secrets/tasktips_jwt_private_key
+          cp deploy/env.example deploy/.env
+          docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
       - run: docker build --file deploy/Dockerfile --tag tasktips-cloud:test .
       - run: docker build --file deploy/Dockerfile.admin --tag tasktips-admin:test .
+      - name: Smoke test API image
+        run: |
+          docker run --detach --name tasktips-api-smoke --env TASKTIPS_BIND_ADDRESS=0.0.0.0:8080 --publish 18080:8080 tasktips-cloud:test
+          trap 'docker rm --force tasktips-api-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/health/live > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18080/health/live > /dev/null
+          curl --fail --silent http://127.0.0.1:18080/openapi.yaml > /dev/null

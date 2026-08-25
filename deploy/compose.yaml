@@ -10,7 +10,7 @@ x-tasktips-environment: &tasktips-environment
   RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
   TASKTIPS_JWT_ISSUER: ${TASKTIPS_JWT_ISSUER:-tasktips-cloud}
   TASKTIPS_JWT_AUDIENCE: ${TASKTIPS_JWT_AUDIENCE:-tasktips-desktop}
-  TASKTIPS_JWT_PRIVATE_KEY_FILE: ${TASKTIPS_JWT_PRIVATE_KEY_FILE:-/run/secrets/tasktips_jwt_private_key}
+  TASKTIPS_JWT_PRIVATE_KEY_FILE: /run/secrets/tasktips_jwt_private_key
   TASKTIPS_ACCESS_TOKEN_TTL_SECONDS: ${TASKTIPS_ACCESS_TOKEN_TTL_SECONDS:-900}
   TASKTIPS_REFRESH_TOKEN_TTL_SECONDS: ${TASKTIPS_REFRESH_TOKEN_TTL_SECONDS:-2592000}
   TASKTIPS_MAX_PUSH_OBJECTS: ${TASKTIPS_MAX_PUSH_OBJECTS:-100}
@@ -67,11 +67,13 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     environment: *tasktips-environment
+    secrets:
+      - tasktips_jwt_private_key
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: [CMD, curl, --fail, http://localhost:8080/health/live]
+      test: [CMD, curl, --fail, http://localhost:8080/health/ready]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -83,6 +85,8 @@ services:
       dockerfile: deploy/Dockerfile
     command: [tasktips-worker]
     environment: *tasktips-environment
+    secrets:
+      - tasktips_jwt_private_key
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -127,3 +131,7 @@ volumes:
   rustfs-data:
   caddy-data:
   caddy-config:
+
+secrets:
+  tasktips_jwt_private_key:
+    file: ${TASKTIPS_JWT_PRIVATE_KEY_SOURCE:?TASKTIPS_JWT_PRIVATE_KEY_SOURCE is required}
