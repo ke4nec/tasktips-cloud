@@ -10,9 +10,14 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
-use prometheus_client::{encoding::text::encode, registry::Registry};
 use serde::Serialize;
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use tasktips_object_store::ObjectStore;
 use tasktips_persistence::Persistence;
 use tower::{ServiceBuilder, timeout::TimeoutLayer};
@@ -40,11 +45,36 @@ pub struct AppState {
     pub(crate) auth: Option<AuthService>,
     pub(crate) object_store: Option<ObjectStore>,
     pub(crate) cursor: Option<CursorSigner>,
+    pub(crate) metrics: Arc<ApiMetrics>,
+}
+
+#[derive(Default)]
+pub struct ApiMetrics {
+    pub sync_pull_total: AtomicU64,
+    pub sync_push_total: AtomicU64,
+    pub sync_conflict_total: AtomicU64,
+    pub payload_upload_bytes_total: AtomicU64,
+    pub payload_download_bytes_total: AtomicU64,
+    pub restore_job_total: AtomicU64,
+}
+
+impl ApiMetrics {
+    fn openmetrics(&self) -> String {
+        format!(
+            "# TYPE sync_pull_total counter\nsync_pull_total {}\n# TYPE sync_push_total counter\nsync_push_total {}\n# TYPE sync_conflict_total counter\nsync_conflict_total {}\n# TYPE payload_upload_bytes_total counter\npayload_upload_bytes_total {}\n# TYPE payload_download_bytes_total counter\npayload_download_bytes_total {}\n# TYPE restore_job_total counter\nrestore_job_total {}\n# EOF\n",
+            self.sync_pull_total.load(Ordering::Relaxed),
+            self.sync_push_total.load(Ordering::Relaxed),
+            self.sync_conflict_total.load(Ordering::Relaxed),
+            self.payload_upload_bytes_total.load(Ordering::Relaxed),
+            self.payload_download_bytes_total.load(Ordering::Relaxed),
+            self.restore_job_total.load(Ordering::Relaxed),
+        )
+    }
 }
 
 impl AppState {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         readiness: Readiness,
         database: Option<Persistence>,
         auth: Option<AuthService>,
@@ -55,6 +85,7 @@ impl AppState {
             auth,
             object_store: None,
             cursor: None,
+            metrics: Arc::new(ApiMetrics::default()),
         }
     }
 
@@ -66,7 +97,7 @@ impl AppState {
     }
 
     #[must_use]
-    pub const fn unavailable(readiness: Readiness) -> Self {
+    pub fn unavailable(readiness: Readiness) -> Self {
         Self::new(readiness, None, None)
     }
 }
@@ -310,15 +341,8 @@ async fn not_found(headers: HeaderMap) -> impl IntoResponse {
     )
 }
 
-async fn metrics() -> Response {
-    let registry = Registry::default();
-    let mut body = String::new();
-    let status = if encode(&mut body, &registry).is_ok() {
-        StatusCode::OK
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-    };
-    let mut response = (status, body).into_response();
+async fn metrics(State(state): State<AppState>) -> Response {
+    let mut response = (StatusCode::OK, state.metrics.openmetrics()).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/openmetrics-text; version=1.0.0; charset=utf-8"),
@@ -328,7 +352,7 @@ async fn metrics() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{Readiness, ReadinessSnapshot, build_router};
+    use super::{AppState, Readiness, ReadinessSnapshot, build_application_router, build_router};
 
     #[test]
     fn readiness_requires_every_dependency() {
@@ -390,5 +414,32 @@ mod tests {
             .await
             .expect("router should respond");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn metrics_exposes_operational_counters() {
+        use axum::{
+            body::{Body, to_bytes},
+            http::{Request, StatusCode},
+        };
+        use std::sync::atomic::Ordering;
+        use tower::ServiceExt;
+
+        let state = AppState::unavailable(Readiness::unavailable());
+        state.metrics.sync_pull_total.store(2, Ordering::Relaxed);
+        let response = build_application_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("sync_pull_total 2"));
+        assert!(text.ends_with("# EOF\n"));
     }
 }

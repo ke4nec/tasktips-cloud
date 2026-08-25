@@ -153,6 +153,18 @@ body {
   width: 100%;
 }
 
+.restore-form {
+  padding: 14px 16px 2px;
+  margin-bottom: 16px;
+  border: 1px solid #dfe3e8;
+  border-radius: 6px;
+}
+
+.restore-form .el-input-number,
+.restore-form .el-input {
+  width: 190px;
+}
+
 .login-page,
 .auth-loading {
   display: grid;
@@ -229,7 +241,8 @@ body {
   }
 
   .metric-card,
-  .login-card {
+  .login-card,
+  .restore-form {
     border-color: #30343a;
     background: #1d2024;
   }

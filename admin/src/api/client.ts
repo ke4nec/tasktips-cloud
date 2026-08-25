@@ -38,8 +38,15 @@ export class ApiClient {
     return this.get<ReadinessResponse>('/health/ready');
   }
 
-  login(email: string, password: string): Promise<{ accessToken: string; expiresIn: number }> {
-    return this.post('/api/v1/auth/login', { email, password, deviceId: crypto.randomUUID() });
+  login(
+    email: string,
+    password: string,
+  ): Promise<{ accessToken: string; expiresIn: number }> {
+    return this.post('/api/v1/auth/login', {
+      email,
+      password,
+      deviceId: crypto.randomUUID(),
+    });
   }
 
   refresh(): Promise<{ accessToken: string; expiresIn: number }> {
@@ -58,12 +65,20 @@ export class ApiClient {
     return this.get('/api/v1/admin/users');
   }
 
-  getAdminProjects(userId?: string): Promise<components['schemas']['ProjectList']> {
-    return this.get(userId ? `/api/v1/admin/users/${userId}/projects` : '/api/v1/projects');
+  getAdminProjects(
+    userId?: string,
+  ): Promise<components['schemas']['ProjectList']> {
+    return this.get(
+      userId ? `/api/v1/admin/users/${userId}/projects` : '/api/v1/projects',
+    );
   }
 
-  getAdminDevices(userId?: string): Promise<components['schemas']['DeviceList']> {
-    return this.get(userId ? `/api/v1/admin/users/${userId}/devices` : '/api/v1/devices');
+  getAdminDevices(
+    userId?: string,
+  ): Promise<components['schemas']['DeviceList']> {
+    return this.get(
+      userId ? `/api/v1/admin/users/${userId}/devices` : '/api/v1/devices',
+    );
   }
 
   getAdminSyncAttempts(): Promise<components['schemas']['SyncAttemptList']> {
@@ -76,6 +91,13 @@ export class ApiClient {
 
   getAdminRestoreJobs(): Promise<components['schemas']['RestoreJobList']> {
     return this.get('/api/v1/admin/restores');
+  }
+
+  createAdminRestore(
+    projectId: string,
+    request: components['schemas']['RestoreRequest'],
+  ): Promise<components['schemas']['RestoreJob']> {
+    return this.post(`/api/v1/admin/projects/${projectId}/restores`, request);
   }
 
   private async get<T>(path: string): Promise<T> {
@@ -112,17 +134,22 @@ export class ApiClient {
       throw new ApiError(
         response.status,
         errorBody?.code ?? 'INTERNAL_ERROR',
-        errorBody?.message ?? `API request failed with status ${response.status}`,
+        errorBody?.message ??
+          `API request failed with status ${response.status}`,
         errorBody?.requestId,
       );
     }
-    return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+    return response.status === 204
+      ? (undefined as T)
+      : ((await response.json()) as T);
   }
 
   private headers(): Record<string, string> {
     return {
       Accept: 'application/json',
-      ...(this.accessToken ? { Authorization: `Bearer ${this.accessToken}` } : {}),
+      ...(this.accessToken
+        ? { Authorization: `Bearer ${this.accessToken}` }
+        : {}),
     };
   }
 }

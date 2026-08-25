@@ -511,6 +511,10 @@ pub async fn put_payload(
         )
         .await
         .map_err(|error| map_object_store(&error, request_id.clone()))?;
+    state.metrics.payload_upload_bytes_total.fetch_add(
+        u64::try_from(content_length).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     database
         .register_payload(
             claims.sub,
@@ -553,6 +557,12 @@ pub async fn get_payload(
         .get_payload(claims.sub, project_id, &content_hash, range.as_deref())
         .await
         .map_err(|error| map_object_store(&error, request_id.clone()))?;
+    if let Some(length) = download.content_length {
+        state.metrics.payload_download_bytes_total.fetch_add(
+            u64::try_from(length).unwrap_or_default(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
     let mut response = Response::builder()
         .status(if download.content_range.is_some() {
             StatusCode::PARTIAL_CONTENT
@@ -698,6 +708,10 @@ pub async fn pull(
             0,
         ))
         .map_err(|_| ApiError::internal(request_id))?;
+    state
+        .metrics
+        .sync_pull_total
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(Json(serde_json::json!({
         "generation": page.generation,
         "changes": page.records.iter().map(sync_record_json).collect::<Vec<_>>(),
@@ -787,6 +801,10 @@ pub async fn push(
         .await;
     match push_result {
         Ok(response) => {
+            state
+                .metrics
+                .sync_push_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let item_count = response
                 .get("results")
                 .and_then(serde_json::Value::as_array)
@@ -796,6 +814,10 @@ pub async fn push(
                 .and_then(serde_json::Value::as_array)
                 .is_some_and(|items| items.iter().any(|item| item["status"] == "conflict"))
             {
+                state
+                    .metrics
+                    .sync_conflict_total
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 "conflict"
             } else {
                 "succeeded"
@@ -821,6 +843,10 @@ pub async fn push(
             Ok(Json(response))
         }
         Err(error) => {
+            state
+                .metrics
+                .sync_push_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let api_error = map_project_error(error, request_id);
             let _ = database
                 .record_sync_attempt(
@@ -998,6 +1024,10 @@ pub async fn create_restore(
         )
         .await
         .map_err(|error| map_project_error(error, request_id))?;
+    state
+        .metrics
+        .restore_job_total
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -1538,6 +1568,10 @@ pub async fn admin_create_restore(
         )
         .await
         .map_err(|error| map_project_error(error, request_id))?;
+    state
+        .metrics
+        .restore_job_total
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 

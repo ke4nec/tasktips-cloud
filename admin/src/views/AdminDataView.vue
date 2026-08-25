@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { apiClient } from '@/api/client';
@@ -12,6 +12,15 @@ const { t } = useI18n();
 const rows = ref<Row[]>([]);
 const loading = ref(true);
 const error = ref<string>();
+const restoreProjectId = ref('');
+const restoreSequence = ref<number | undefined>();
+const restoreReason = ref('');
+const restoreLoading = ref(false);
+const restoreMessage = ref('');
+
+const projectRows = computed(() =>
+  props.section === 'projects' ? rows.value : [],
+);
 
 const titles: Record<Section, string> = {
   users: 'navigation.users',
@@ -31,10 +40,39 @@ const descriptions: Record<Section, string> = {
 
 const columns: Record<Section, string[]> = {
   users: ['email', 'role', 'status', 'createdAt', 'lastLoginAt'],
-  projects: ['id', 'ownerUserId', 'name', 'generation', 'status', 'changeSequence'],
-  devices: ['id', 'ownerUserId', 'displayName', 'platform', 'appVersion', 'revokedAt'],
-  sync: ['operation', 'status', 'projectId', 'deviceId', 'itemCount', 'latencyMs', 'createdAt'],
-  audit: ['action', 'actorUserId', 'subjectUserId', 'projectId', 'requestId', 'createdAt'],
+  projects: [
+    'id',
+    'ownerUserId',
+    'name',
+    'generation',
+    'status',
+    'changeSequence',
+  ],
+  devices: [
+    'id',
+    'ownerUserId',
+    'displayName',
+    'platform',
+    'appVersion',
+    'revokedAt',
+  ],
+  sync: [
+    'operation',
+    'status',
+    'projectId',
+    'deviceId',
+    'itemCount',
+    'latencyMs',
+    'createdAt',
+  ],
+  audit: [
+    'action',
+    'actorUserId',
+    'subjectUserId',
+    'projectId',
+    'requestId',
+    'createdAt',
+  ],
 };
 
 async function load(): Promise<void> {
@@ -46,7 +84,10 @@ async function load(): Promise<void> {
     } else if (props.section === 'sync') {
       rows.value = (await apiClient.getAdminSyncAttempts()).items as Row[];
       const restores = (await apiClient.getAdminRestoreJobs()).items as Row[];
-      rows.value = [...rows.value, ...restores.map((job) => ({ ...job, operation: 'restore' }))];
+      rows.value = [
+        ...rows.value,
+        ...restores.map((job) => ({ ...job, operation: 'restore' })),
+      ];
     } else if (props.section === 'audit') {
       rows.value = (await apiClient.getAdminAuditEvents()).items as Row[];
     } else {
@@ -60,15 +101,52 @@ async function load(): Promise<void> {
       );
       rows.value = lists.flatMap((list) => list.items as unknown as Row[]);
     }
+    if (
+      !projectRows.value.some(
+        (project) => project.id === restoreProjectId.value,
+      )
+    ) {
+      restoreProjectId.value = '';
+    }
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : t('page.loadFailed');
+    error.value =
+      reason instanceof Error ? reason.message : t('page.loadFailed');
   } finally {
     loading.value = false;
   }
 }
 
+async function queueRestore(): Promise<void> {
+  restoreMessage.value = '';
+  error.value = undefined;
+  if (
+    !restoreProjectId.value ||
+    restoreSequence.value === undefined ||
+    !restoreReason.value.trim()
+  ) {
+    error.value = t('restore.required');
+    return;
+  }
+  restoreLoading.value = true;
+  try {
+    await apiClient.createAdminRestore(restoreProjectId.value, {
+      targetChangeSequence: restoreSequence.value,
+      reason: restoreReason.value.trim(),
+    });
+    restoreMessage.value = t('restore.queued');
+    restoreSequence.value = undefined;
+    restoreReason.value = '';
+  } catch (reason) {
+    error.value =
+      reason instanceof Error ? reason.message : t('page.loadFailed');
+  } finally {
+    restoreLoading.value = false;
+  }
+}
+
 function display(value: unknown): string {
-  if (value === null || value === undefined || value === '') return t('table.empty');
+  if (value === null || value === undefined || value === '')
+    return t('table.empty');
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
@@ -84,12 +162,65 @@ onMounted(load);
         <h1>{{ t(titles[props.section]) }}</h1>
         <p>{{ t(descriptions[props.section]) }}</p>
       </div>
-      <el-button :loading="loading" @click="load">{{ t('actions.refresh') }}</el-button>
+      <el-button :loading="loading" @click="load">{{
+        t('actions.refresh')
+      }}</el-button>
     </header>
     <el-alert v-if="error" :title="error" type="error" show-icon />
+    <el-alert
+      v-if="restoreMessage"
+      :title="restoreMessage"
+      type="success"
+      show-icon
+    />
+    <el-form
+      v-if="props.section === 'projects' && !loading"
+      class="restore-form"
+      inline
+    >
+      <el-form-item :label="t('restore.project')">
+        <el-select
+          v-model="restoreProjectId"
+          :placeholder="t('restore.projectPlaceholder')"
+          filterable
+        >
+          <el-option
+            v-for="project in projectRows"
+            :key="String(project.id)"
+            :label="`${display(project.name)} (${display(project.id)})`"
+            :value="String(project.id)"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item :label="t('restore.sequence')">
+        <el-input-number v-model="restoreSequence" :min="0" :precision="0" />
+      </el-form-item>
+      <el-form-item :label="t('restore.reason')">
+        <el-input
+          v-model="restoreReason"
+          :placeholder="t('restore.reasonPlaceholder')"
+          maxlength="500"
+        />
+      </el-form-item>
+      <el-form-item>
+        <el-button
+          type="primary"
+          :loading="restoreLoading"
+          @click="queueRestore"
+        >
+          {{ t('restore.submit') }}
+        </el-button>
+      </el-form-item>
+    </el-form>
     <el-skeleton v-if="loading" :rows="5" animated />
     <el-table v-else :data="rows" stripe class="data-table" empty-text="">
-      <el-table-column v-for="column in columns[props.section]" :key="column" :prop="column" :label="t(`columns.${column}`)" min-width="150">
+      <el-table-column
+        v-for="column in columns[props.section]"
+        :key="column"
+        :prop="column"
+        :label="t(`columns.${column}`)"
+        min-width="150"
+      >
         <template #default="scope">{{ display(scope.row[column]) }}</template>
       </el-table-column>
       <template #empty><el-empty :description="t('page.noData')" /></template>

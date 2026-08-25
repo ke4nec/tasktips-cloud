@@ -19,6 +19,10 @@ TaskTips 的独立同步服务、后台任务、管理后台和部署工程。�
 - `deploy`：容器镜像、Compose、Caddy 和配置样例。
 - `tests`：契约、集成和端到端测试。
 
+生产自托管、升级、备份和隔离恢复演练见 [`docs/self-hosting.md`](docs/self-hosting.md)。
+备份使用 [`deploy/backup.sh`](deploy/backup.sh)，恢复演练使用
+[`deploy/restore-drill.sh`](deploy/restore-drill.sh)；两者都不会把密钥写入仓库。
+
 ## 本地检查
 
 ```text
