@@ -29,6 +29,7 @@ Use the pinned Rust toolchain and committed lockfiles.
 - `cd admin && npm ci`: install the exact frontend dependency graph.
 - `cd admin && npm run check`: lint, test, generate/check the API client, and build.
 - `docker compose --env-file deploy/.env -f deploy/compose.yaml config`: validate deployment configuration.
+- `docker compose -f deploy/compose.dev.yaml config`: validate the development stack (PostgreSQL and RustFS only, localhost-bound, fixed dev credentials).
 
 Run the smallest relevant checks while iterating, then run every directly affected check before handoff. Docker-dependent PostgreSQL, RustFS, image, and Compose tests require a working Docker engine; report them as unverified when Docker is unavailable.
 
