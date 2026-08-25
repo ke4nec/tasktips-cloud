@@ -1,18 +1,59 @@
+pub mod auth;
+mod routes;
+
 use axum::{
-    Json, Router,
+    BoxError, Json, Router,
+    error_handling::HandleErrorLayer,
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, patch, post},
 };
 use prometheus_client::{encoding::text::encode, registry::Registry};
 use serde::Serialize;
+use std::time::Duration;
 use tasktips_object_store::ObjectStore;
 use tasktips_persistence::Persistence;
+use tower::{ServiceBuilder, timeout::TimeoutLayer};
 use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::TraceLayer,
 };
+
+use auth::AuthService;
+use routes::{
+    activate_invitation, admin_list_devices, admin_list_projects, admin_list_users,
+    change_password, create_invitation, create_project, current_user, disable_account,
+    disable_project, enable_account, get_project, list_devices, list_projects, login, logout,
+    refresh, register_device, rename_project, revoke_device, update_device,
+};
+
+#[derive(Clone, Default)]
+pub struct AppState {
+    readiness: Readiness,
+    pub(crate) database: Option<Persistence>,
+    pub(crate) auth: Option<AuthService>,
+}
+
+impl AppState {
+    #[must_use]
+    pub const fn new(
+        readiness: Readiness,
+        database: Option<Persistence>,
+        auth: Option<AuthService>,
+    ) -> Self {
+        Self {
+            readiness,
+            database,
+            auth,
+        }
+    }
+
+    #[must_use]
+    pub const fn unavailable(readiness: Readiness) -> Self {
+        Self::new(readiness, None, None)
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct Readiness {
@@ -81,13 +122,76 @@ struct ErrorResponse {
 }
 
 pub fn build_router(readiness: Readiness) -> Router {
+    build_application_router(AppState::unavailable(readiness))
+}
+
+pub fn build_application_router(state: AppState) -> Router {
     Router::new()
         .route("/health/live", get(liveness))
         .route("/health/ready", get(readiness_check))
         .route("/metrics", get(metrics))
         .route("/openapi.yaml", get(openapi))
+        .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/refresh", post(refresh))
+        .route("/api/v1/auth/logout", post(logout))
+        .route(
+            "/api/v1/auth/invitations/activate",
+            post(activate_invitation),
+        )
+        .route("/api/v1/me", get(current_user))
+        .route("/api/v1/me/password", patch(change_password))
+        .route("/api/v1/projects", get(list_projects).post(create_project))
+        .route(
+            "/api/v1/projects/{projectId}",
+            get(get_project).patch(rename_project),
+        )
+        .route(
+            "/api/v1/projects/{projectId}/disable",
+            post(disable_project),
+        )
+        .route("/api/v1/devices", get(list_devices))
+        .route("/api/v1/devices/register", post(register_device))
+        .route("/api/v1/devices/{deviceId}", patch(update_device))
+        .route("/api/v1/devices/{deviceId}/revoke", post(revoke_device))
+        .route("/api/v1/admin/users", get(admin_list_users))
+        .route("/api/v1/admin/invitations", post(create_invitation))
+        .route(
+            "/api/v1/admin/users/{userId}/disable",
+            post(disable_account),
+        )
+        .route("/api/v1/admin/users/{userId}/enable", post(enable_account))
+        .route(
+            "/api/v1/admin/users/{userId}/projects",
+            get(admin_list_projects),
+        )
+        .route(
+            "/api/v1/admin/users/{userId}/devices",
+            get(admin_list_devices),
+        )
         .fallback(not_found)
-        .with_state(readiness)
+        .with_state(state)
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(
+                    |headers: HeaderMap, _: BoxError| async move {
+                        let request_id = headers
+                            .get("x-request-id")
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("unknown")
+                            .to_owned();
+                        (
+                            StatusCode::REQUEST_TIMEOUT,
+                            Json(ErrorResponse {
+                                code: "REQUEST_TIMEOUT",
+                                message: "请求处理超时",
+                                retryable: true,
+                                request_id,
+                            }),
+                        )
+                    },
+                ))
+                .layer(TimeoutLayer::new(Duration::from_secs(10))),
+        )
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(TraceLayer::new_for_http())
@@ -101,8 +205,8 @@ async fn liveness() -> Json<HealthResponse> {
     })
 }
 
-async fn readiness_check(State(readiness): State<Readiness>) -> impl IntoResponse {
-    let snapshot = readiness.check().await;
+async fn readiness_check(State(state): State<AppState>) -> impl IntoResponse {
+    let snapshot = state.readiness.check().await;
     let status = if snapshot.is_ready() {
         StatusCode::OK
     } else {

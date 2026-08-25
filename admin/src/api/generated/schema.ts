@@ -115,7 +115,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Revoke the current refresh token */
+    /** Revoke all refresh tokens for the authenticated device */
     post: operations['logout'];
     delete?: never;
     options?: never;
@@ -174,6 +174,248 @@ export interface paths {
     patch: operations['changePassword'];
     trace?: never;
   };
+  '/api/v1/projects': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List projects owned by the current account */
+    get: operations['listProjects'];
+    put?: never;
+    /** Create a personal project */
+    post: operations['createProject'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    /** Get an owned project */
+    get: operations['getProject'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Rename an owned project */
+    patch: operations['updateProject'];
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/disable': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Disable an owned project without deleting history */
+    post: operations['disableProject'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/devices': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List devices owned by the current account */
+    get: operations['listDevices'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/devices/register': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Register or update the authenticated device profile */
+    post: operations['registerDevice'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/devices/{deviceId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        deviceId: components['parameters']['DeviceId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Rename an owned active device */
+    patch: operations['updateDevice'];
+    trace?: never;
+  };
+  '/api/v1/devices/{deviceId}/revoke': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        deviceId: components['parameters']['DeviceId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Revoke an owned device and all of its refresh tokens */
+    post: operations['revokeDevice'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/invitations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create or replace an invitation */
+    post: operations['createInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List account metadata
+     * @description Never returns payload content, object keys, download URLs, or storage credentials.
+     */
+    get: operations['adminListUsers'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users/{userId}/disable': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Disable an account and revoke its refresh tokens */
+    post: operations['disableAccount'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users/{userId}/enable': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Enable an account */
+    post: operations['enableAccount'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users/{userId}/projects': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    /** List a user's project metadata */
+    get: operations['adminListUserProjects'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users/{userId}/devices': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    /** List a user's device metadata */
+    get: operations['adminListUserDevices'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -197,6 +439,7 @@ export interface components {
       | 'INVALID_REQUEST'
       | 'INTERNAL_ERROR'
       | 'AUTHENTICATION_REQUIRED'
+      | 'AUTHORIZATION_DENIED'
       | 'ACCOUNT_DISABLED'
       | 'DEVICE_REVOKED'
       | 'PROJECT_NOT_FOUND'
@@ -208,6 +451,8 @@ export interface components {
       | 'CURSOR_INVALID'
       | 'IDEMPOTENCY_CONFLICT'
       | 'RATE_LIMITED'
+      | 'REQUEST_TIMEOUT'
+      | 'INVALID_ACCOUNT_STATUS_TRANSITION'
       | 'STORAGE_UNAVAILABLE';
     ErrorDetails: {
       expectedRevision?: number;
@@ -222,8 +467,9 @@ export interface components {
       /** Format: uuid */
       deviceId: string;
     };
+    /** @description Desktop clients provide refreshToken. Administrator clients may omit the body and use the HttpOnly refresh cookie. */
     RefreshTokenRequest: {
-      refreshToken: string;
+      refreshToken?: string;
     };
     InvitationActivationRequest: {
       invitationToken: string;
@@ -234,6 +480,10 @@ export interface components {
     TokenResponse: {
       accessToken: string;
       refreshToken: string;
+      expiresIn: number;
+    };
+    AdminTokenResponse: {
+      accessToken: string;
       expiresIn: number;
     };
     CurrentUser: {
@@ -249,6 +499,94 @@ export interface components {
     PasswordChangeRequest: {
       currentPassword: string;
       newPassword: string;
+    };
+    ProjectRequest: {
+      name: string;
+    };
+    Project: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      ownerUserId: string;
+      name: string;
+      generation: number;
+      /** @enum {string} */
+      status: 'active' | 'maintenance' | 'disabled' | 'deleting';
+      changeSequence: number;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      updatedAt: string;
+    };
+    ProjectList: {
+      items: components['schemas']['Project'][];
+    };
+    RegisterDeviceRequest: {
+      /** Format: uuid */
+      deviceId: string;
+      displayName: string;
+      platform: string;
+      appVersion: string;
+    };
+    UpdateDeviceRequest: {
+      displayName: string;
+    };
+    Device: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      ownerUserId: string;
+      displayName: string;
+      platform: string;
+      appVersion: string;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      lastSeenAt?: string | null;
+      /** Format: date-time */
+      lastLoginAt?: string | null;
+      /** Format: date-time */
+      lastPullAt?: string | null;
+      /** Format: date-time */
+      lastPushAt?: string | null;
+      /** Format: date-time */
+      revokedAt?: string | null;
+    };
+    DeviceList: {
+      items: components['schemas']['Device'][];
+    };
+    CreateInvitationRequest: {
+      /** Format: email */
+      email: string;
+    };
+    CreateInvitationResponse: {
+      /** Format: uuid */
+      id: string;
+      /** Format: email */
+      email: string;
+      invitationToken: string;
+      /** Format: date-time */
+      expiresAt: string;
+    };
+    ReasonRequest: {
+      reason: string;
+    };
+    AdminUser: {
+      /** Format: uuid */
+      id: string;
+      /** Format: email */
+      email: string;
+      /** @enum {string} */
+      role: 'user' | 'system_admin';
+      /** @enum {string} */
+      status: 'active' | 'disabled' | 'pending' | 'deleting';
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      lastLoginAt?: string | null;
+    };
+    AdminUserList: {
+      items: components['schemas']['AdminUser'][];
     };
   };
   responses: {
@@ -270,8 +608,66 @@ export interface components {
         'application/json': components['schemas']['ErrorResponse'];
       };
     };
+    /** @description The account or device is disabled, revoked, or not authorized. */
+    Forbidden: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The resource does not exist in the authenticated owner scope. */
+    NotFound: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The project does not exist in the authenticated owner scope. */
+    ProjectNotFound: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The target record already exists in an incompatible state. */
+    Conflict: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The authentication endpoint rate limit was exceeded. */
+    RateLimited: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description The request exceeded the service timeout. */
+    RequestTimeout: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
   };
-  parameters: never;
+  parameters: {
+    ProjectId: string;
+    DeviceId: string;
+    UserId: string;
+  };
   requestBodies: never;
   headers: never;
   pathItems: never;
@@ -380,16 +776,24 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Access and refresh credentials. */
+      /** @description Access credentials. Desktop clients receive refreshToken in JSON; system_admin clients receive it only as a Secure HttpOnly cookie. */
       200: {
         headers: {
+          /** @description Present for system_admin sessions and contains the rotated refresh token. */
+          'Set-Cookie'?: string;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['TokenResponse'];
+          'application/json':
+            | components['schemas']['TokenResponse']
+            | components['schemas']['AdminTokenResponse'];
         };
       };
+      400: components['responses']['InvalidRequest'];
       401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      408: components['responses']['RequestTimeout'];
+      429: components['responses']['RateLimited'];
     };
   };
   refreshToken: {
@@ -399,22 +803,29 @@ export interface operations {
       path?: never;
       cookie?: never;
     };
-    requestBody: {
+    requestBody?: {
       content: {
         'application/json': components['schemas']['RefreshTokenRequest'];
       };
     };
     responses: {
-      /** @description Rotated access and refresh credentials. */
+      /** @description Rotated access credentials. Desktop clients send refreshToken in JSON; system_admin clients use the refresh cookie. */
       200: {
         headers: {
+          /** @description Present for system_admin sessions and replaces the refresh cookie. */
+          'Set-Cookie'?: string;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['TokenResponse'];
+          'application/json':
+            | components['schemas']['TokenResponse']
+            | components['schemas']['AdminTokenResponse'];
         };
       };
       401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      408: components['responses']['RequestTimeout'];
+      429: components['responses']['RateLimited'];
     };
   };
   logout: {
@@ -426,14 +837,17 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description The refresh token was revoked. */
+      /** @description The authenticated device sessions were revoked. */
       204: {
         headers: {
+          /** @description Clears the administrator refresh cookie when present. */
+          'Set-Cookie'?: string;
           [name: string]: unknown;
         };
         content?: never;
       };
       401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
     };
   };
   activateInvitation: {
@@ -459,6 +873,8 @@ export interface operations {
         };
       };
       400: components['responses']['InvalidRequest'];
+      408: components['responses']['RequestTimeout'];
+      429: components['responses']['RateLimited'];
     };
   };
   getCurrentUser: {
@@ -480,6 +896,7 @@ export interface operations {
         };
       };
       401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
     };
   };
   changePassword: {
@@ -504,6 +921,397 @@ export interface operations {
       };
       400: components['responses']['InvalidRequest'];
       401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  listProjects: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Projects visible through owner RLS. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  createProject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ProjectRequest'];
+      };
+    };
+    responses: {
+      /** @description Project created. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Project'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  getProject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Owned project metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Project'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+    };
+  };
+  updateProject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ProjectRequest'];
+      };
+    };
+    responses: {
+      /** @description Updated project metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Project'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+    };
+  };
+  disableProject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Disabled project metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Project'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+    };
+  };
+  listDevices: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Devices visible through owner RLS. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeviceList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  registerDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RegisterDeviceRequest'];
+      };
+    };
+    responses: {
+      /** @description Registered device metadata. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Device'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  updateDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        deviceId: components['parameters']['DeviceId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateDeviceRequest'];
+      };
+    };
+    responses: {
+      /** @description Updated device metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Device'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  revokeDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        deviceId: components['parameters']['DeviceId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked device metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Device'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+    };
+  };
+  createInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateInvitationRequest'];
+      };
+    };
+    responses: {
+      /** @description Invitation token, returned once for out-of-band delivery. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CreateInvitationResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  adminListUsers: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Privacy-preserving account metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminUserList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  disableAccount: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ReasonRequest'];
+      };
+    };
+    responses: {
+      /** @description Account disabled. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  enableAccount: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ReasonRequest'];
+      };
+    };
+    responses: {
+      /** @description Account enabled. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  adminListUserProjects: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Project metadata without payload references. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminListUserDevices: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Device metadata without credentials. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeviceList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
     };
   };
 }

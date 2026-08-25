@@ -18,16 +18,26 @@ authors = ["TaskTips"]
 
 [workspace.dependencies]
 async-trait = "=0.1.92"
+argon2 = "=0.5.3"
 aws-config = "=1.11.0"
 aws-sdk-s3 = "=1.143.0"
 axum = "=0.8.9"
+base64 = "=0.22.1"
+ed25519-dalek = { version = "=2.2.0", features = ["pkcs8"] }
+getrandom = "=0.4.3"
+hex = "=0.4.3"
+jsonwebtoken = { version = "=10.2.0", default-features = false, features = ["rust_crypto"] }
+pem = "=3.0.5"
 prometheus-client = "=0.25.0"
+rpassword = "=7.4.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-sqlx = { version = "=0.9.0", default-features = false, features = ["json", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
+sha2 = "=0.11.0"
+sqlx = { version = "=0.9.0", default-features = false, features = ["json", "macros", "migrate", "postgres", "runtime-tokio", "time", "tls-rustls-ring-webpki", "uuid"] }
 thiserror = "=2.0.20"
+time = { version = "=0.3.55", features = ["serde-human-readable"] }
 tokio = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread", "signal"] }
-tower = { version = "=0.5.3", features = ["util"] }
+tower = { version = "=0.5.3", features = ["timeout", "util"] }
 tower-http = { version = "=0.7.0", features = ["request-id", "trace"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }

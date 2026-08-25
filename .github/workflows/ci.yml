@@ -64,6 +64,8 @@ jobs:
           toolchain: 1.97.1
       - uses: Swatinem/rust-cache@v2
       - run: cargo run --locked --package tasktips-api -- migrate
+      - run: cargo test --locked --package tasktips-persistence --test identity_rls
+      - run: cargo test --locked --package tasktips-api --test stage_b_api
 
   images:
     runs-on: ubuntu-latest

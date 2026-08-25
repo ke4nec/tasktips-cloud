@@ -13,6 +13,12 @@ tags:
     description: Process health and internal observability endpoints.
   - name: Authentication
     description: Account and device authentication endpoints.
+  - name: Projects
+    description: Personal project metadata endpoints.
+  - name: Devices
+    description: Personal device registration and revocation endpoints.
+  - name: Administration
+    description: Privacy-preserving system administration metadata endpoints.
 paths:
   /openapi.yaml:
     get:
@@ -86,13 +92,28 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: Access and refresh credentials.
+          description: Access credentials. Desktop clients receive refreshToken in JSON; system_admin clients receive it only as a Secure HttpOnly cookie.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TokenResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/TokenResponse'
+                  - $ref: '#/components/schemas/AdminTokenResponse'
+          headers:
+            Set-Cookie:
+              description: Present for system_admin sessions and contains the rotated refresh token.
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
   /api/v1/auth/refresh:
     post:
       operationId: refreshToken
@@ -100,32 +121,52 @@ paths:
       tags: [Authentication]
       security: []
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/RefreshTokenRequest'
       responses:
         '200':
-          description: Rotated access and refresh credentials.
+          description: Rotated access credentials. Desktop clients send refreshToken in JSON; system_admin clients use the refresh cookie.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TokenResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/TokenResponse'
+                  - $ref: '#/components/schemas/AdminTokenResponse'
+          headers:
+            Set-Cookie:
+              description: Present for system_admin sessions and replaces the refresh cookie.
+              schema:
+                type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
   /api/v1/auth/logout:
     post:
       operationId: logout
-      summary: Revoke the current refresh token
+      summary: Revoke all refresh tokens for the authenticated device
       tags: [Authentication]
       security:
         - bearerAuth: []
       responses:
         '204':
-          description: The refresh token was revoked.
+          description: The authenticated device sessions were revoked.
+          headers:
+            Set-Cookie:
+              description: Clears the administrator refresh cookie when present.
+              schema:
+                type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/auth/invitations/activate:
     post:
       operationId: activateInvitation
@@ -147,6 +188,10 @@ paths:
                 $ref: '#/components/schemas/TokenResponse'
         '400':
           $ref: '#/components/responses/InvalidRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
   /api/v1/me:
     get:
       operationId: getCurrentUser
@@ -163,6 +208,8 @@ paths:
                 $ref: '#/components/schemas/CurrentUser'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/me/password:
     patch:
       operationId: changePassword
@@ -183,6 +230,363 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/projects:
+    get:
+      operationId: listProjects
+      summary: List projects owned by the current account
+      tags: [Projects]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Projects visible through owner RLS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createProject
+      summary: Create a personal project
+      tags: [Projects]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+      responses:
+        '201':
+          description: Project created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getProject
+      summary: Get an owned project
+      tags: [Projects]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Owned project metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+    patch:
+      operationId: updateProject
+      summary: Rename an owned project
+      tags: [Projects]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+      responses:
+        '200':
+          description: Updated project metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+  /api/v1/projects/{projectId}/disable:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: disableProject
+      summary: Disable an owned project without deleting history
+      tags: [Projects]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Disabled project metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+  /api/v1/devices:
+    get:
+      operationId: listDevices
+      summary: List devices owned by the current account
+      tags: [Devices]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Devices visible through owner RLS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/devices/register:
+    post:
+      operationId: registerDevice
+      summary: Register or update the authenticated device profile
+      tags: [Devices]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterDeviceRequest'
+      responses:
+        '201':
+          description: Registered device metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/devices/{deviceId}:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    patch:
+      operationId: updateDevice
+      summary: Rename an owned active device
+      tags: [Devices]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDeviceRequest'
+      responses:
+        '200':
+          description: Updated device metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/devices/{deviceId}/revoke:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    post:
+      operationId: revokeDevice
+      summary: Revoke an owned device and all of its refresh tokens
+      tags: [Devices]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Revoked device metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/admin/invitations:
+    post:
+      operationId: createInvitation
+      summary: Create or replace an invitation
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvitationRequest'
+      responses:
+        '201':
+          description: Invitation token, returned once for out-of-band delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateInvitationResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/admin/users:
+    get:
+      operationId: adminListUsers
+      summary: List account metadata
+      description: Never returns payload content, object keys, download URLs, or storage credentials.
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Privacy-preserving account metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/users/{userId}/disable:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      operationId: disableAccount
+      summary: Disable an account and revoke its refresh tokens
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+      responses:
+        '204':
+          description: Account disabled.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/admin/users/{userId}/enable:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      operationId: enableAccount
+      summary: Enable an account
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+      responses:
+        '204':
+          description: Account enabled.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/admin/users/{userId}/projects:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    get:
+      operationId: adminListUserProjects
+      summary: List a user's project metadata
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Project metadata without payload references.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/users/{userId}/devices:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    get:
+      operationId: adminListUserDevices
+      summary: List a user's device metadata
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Device metadata without credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 components:
   securitySchemes:
     bearerAuth:
@@ -202,6 +606,64 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: The account or device is disabled, revoked, or not authorized.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: The resource does not exist in the authenticated owner scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ProjectNotFound:
+      description: The project does not exist in the authenticated owner scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: The target record already exists in an incompatible state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: The authentication endpoint rate limit was exceeded.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RequestTimeout:
+      description: The request exceeded the service timeout.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   schemas:
     HealthResponse:
       type: object
@@ -237,6 +699,7 @@ components:
         - INVALID_REQUEST
         - INTERNAL_ERROR
         - AUTHENTICATION_REQUIRED
+        - AUTHORIZATION_DENIED
         - ACCOUNT_DISABLED
         - DEVICE_REVOKED
         - PROJECT_NOT_FOUND
@@ -248,6 +711,8 @@ components:
         - CURSOR_INVALID
         - IDEMPOTENCY_CONFLICT
         - RATE_LIMITED
+        - REQUEST_TIMEOUT
+        - INVALID_ACCOUNT_STATUS_TRANSITION
         - STORAGE_UNAVAILABLE
     ErrorDetails:
       type: object
@@ -282,11 +747,11 @@ components:
     RefreshTokenRequest:
       type: object
       additionalProperties: false
-      required: [refreshToken]
       properties:
         refreshToken:
           type: string
           minLength: 1
+      description: Desktop clients provide refreshToken. Administrator clients may omit the body and use the HttpOnly refresh cookie.
     InvitationActivationRequest:
       type: object
       additionalProperties: false
@@ -297,7 +762,7 @@ components:
           minLength: 1
         password:
           type: string
-          minLength: 1
+          minLength: 12
         deviceId:
           type: string
           format: uuid
@@ -309,6 +774,16 @@ components:
         accessToken:
           type: string
         refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+          minimum: 1
+    AdminTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [accessToken, expiresIn]
+      properties:
+        accessToken:
           type: string
         expiresIn:
           type: integer
@@ -340,4 +815,188 @@ components:
           minLength: 1
         newPassword:
           type: string
+          minLength: 12
+    ProjectRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
           minLength: 1
+          maxLength: 128
+    Project:
+      type: object
+      additionalProperties: false
+      required: [id, ownerUserId, name, generation, status, changeSequence, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ownerUserId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        generation:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [active, maintenance, disabled, deleting]
+        changeSequence:
+          type: integer
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ProjectList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+    RegisterDeviceRequest:
+      type: object
+      additionalProperties: false
+      required: [deviceId, displayName, platform, appVersion]
+      properties:
+        deviceId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 128
+        platform:
+          type: string
+          minLength: 1
+          maxLength: 64
+        appVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+    UpdateDeviceRequest:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 128
+    Device:
+      type: object
+      additionalProperties: false
+      required: [id, ownerUserId, displayName, platform, appVersion, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ownerUserId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        platform:
+          type: string
+        appVersion:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: [string, 'null']
+          format: date-time
+        lastLoginAt:
+          type: [string, 'null']
+          format: date-time
+        lastPullAt:
+          type: [string, 'null']
+          format: date-time
+        lastPushAt:
+          type: [string, 'null']
+          format: date-time
+        revokedAt:
+          type: [string, 'null']
+          format: date-time
+    DeviceList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Device'
+    CreateInvitationRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+    CreateInvitationResponse:
+      type: object
+      additionalProperties: false
+      required: [id, email, invitationToken, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        invitationToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    ReasonRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    AdminUser:
+      type: object
+      additionalProperties: false
+      required: [id, email, role, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [user, system_admin]
+        status:
+          type: string
+          enum: [active, disabled, pending, deleting]
+        createdAt:
+          type: string
+          format: date-time
+        lastLoginAt:
+          type: [string, 'null']
+          format: date-time
+    AdminUserList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminUser'
