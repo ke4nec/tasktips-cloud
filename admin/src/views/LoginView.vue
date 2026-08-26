@@ -11,7 +11,9 @@ const router = useRouter();
 const auth = useAuthStore();
 const email = ref('');
 const password = ref('');
-const canSubmit = computed(() => email.value.trim().length > 0 && password.value.length > 0);
+const canSubmit = computed(
+  () => email.value.trim().length > 0 && password.value.length > 0,
+);
 
 async function submit(): Promise<void> {
   if (!canSubmit.value) return;
@@ -27,16 +29,36 @@ async function submit(): Promise<void> {
       <el-form @submit.prevent="submit">
         <el-form-item :label="t('auth.email')">
           <el-input v-model="email" type="email" autocomplete="username">
-            <template #prefix><el-icon><User /></el-icon></template>
+            <template #prefix
+              ><el-icon><User /></el-icon
+            ></template>
           </el-input>
         </el-form-item>
         <el-form-item :label="t('auth.password')">
-          <el-input v-model="password" type="password" show-password autocomplete="current-password">
-            <template #prefix><el-icon><Lock /></el-icon></template>
+          <el-input
+            v-model="password"
+            type="password"
+            show-password
+            autocomplete="current-password"
+          >
+            <template #prefix
+              ><el-icon><Lock /></el-icon
+            ></template>
           </el-input>
         </el-form-item>
-        <el-alert v-if="auth.error" :title="auth.error" type="error" show-icon />
-        <el-button class="login-submit" type="primary" native-type="submit" :loading="auth.loading" :disabled="!canSubmit">
+        <el-alert
+          v-if="auth.error"
+          :title="auth.error"
+          type="error"
+          show-icon
+        />
+        <el-button
+          class="login-submit"
+          type="primary"
+          native-type="submit"
+          :loading="auth.loading"
+          :disabled="!canSubmit"
+        >
           {{ t('auth.signIn') }}
         </el-button>
       </el-form>

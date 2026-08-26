@@ -30,7 +30,8 @@ onMounted(async () => {
 watch(
   () => [auth.ready, auth.authenticated, route.path] as const,
   ([ready, authenticated, path]) => {
-    if (ready && !authenticated && path !== '/login') void router.replace('/login');
+    if (ready && !authenticated && path !== '/login')
+      void router.replace('/login');
     if (ready && authenticated && path === '/login') void router.replace('/');
   },
   { immediate: true },

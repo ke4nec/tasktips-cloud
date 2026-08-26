@@ -20,7 +20,10 @@ const cards = computed(() => {
     { label: t('overview.devices'), value: value.devices },
     { label: t('overview.revisions'), value: value.revisions },
     { label: t('overview.tombstones'), value: value.tombstones },
-    { label: t('overview.payloadBytes'), value: formatBytes(value.payloadBytes) },
+    {
+      label: t('overview.payloadBytes'),
+      value: formatBytes(value.payloadBytes),
+    },
     { label: t('overview.queuedRestores'), value: value.queuedRestores },
   ];
 });
@@ -28,7 +31,8 @@ const cards = computed(() => {
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`;
+  if (value < 1024 * 1024 * 1024)
+    return `${(value / 1024 / 1024).toFixed(1)} MiB`;
   return `${(value / 1024 / 1024 / 1024).toFixed(1)} GiB`;
 }
 
@@ -38,7 +42,8 @@ async function load(): Promise<void> {
   try {
     overview.value = await apiClient.getAdminOverview();
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : t('page.loadFailed');
+    error.value =
+      reason instanceof Error ? reason.message : t('page.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -54,17 +59,31 @@ onMounted(load);
         <h1>{{ t('navigation.overview') }}</h1>
         <p>{{ t('page.overviewDescription') }}</p>
       </div>
-      <el-button :loading="loading" @click="load">{{ t('actions.refresh') }}</el-button>
+      <el-button :loading="loading" @click="load">{{
+        t('actions.refresh')
+      }}</el-button>
     </header>
     <el-alert v-if="error" :title="error" type="error" show-icon />
     <el-skeleton v-if="loading" :rows="4" animated />
     <div v-else class="metric-grid">
-      <el-card v-for="card in cards" :key="card.label" shadow="never" class="metric-card">
+      <el-card
+        v-for="card in cards"
+        :key="card.label"
+        shadow="never"
+        class="metric-card"
+      >
         <span>{{ card.label }}</span>
         <strong>{{ card.value }}</strong>
       </el-card>
     </div>
-    <el-alert class="privacy-note" :title="t('overview.privacyNote')" type="info" :closable="false" />
-    <el-button link type="primary" @click="auth.logout">{{ t('auth.signOut') }}</el-button>
+    <el-alert
+      class="privacy-note"
+      :title="t('overview.privacyNote')"
+      type="info"
+      :closable="false"
+    />
+    <el-button link type="primary" @click="auth.logout">{{
+      t('auth.signOut')
+    }}</el-button>
   </section>
 </template>
