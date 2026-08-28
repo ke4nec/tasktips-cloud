@@ -15,7 +15,7 @@ TaskTips 的独立同步服务、后台任务、管理后台和部署工程。�
 - 阶段 C 同步接口要求配置 `TASKTIPS_CURSOR_SIGNING_SECRET`；payload 通过 RustFS 内容寻址存储，
   push 前必须先完成 bootstrap。
 - `admin`：Vue 3 + TypeScript 管理后台。
-- `migrations`：SQLx migration。
+- `migrations/0001_init.sql`：开发阶段的单一 PostgreSQL 初始化脚本；SQLx 会从该脚本建立迁移记录。
 - `deploy`：容器镜像、Compose、Caddy 和配置样例。
 - `tests`：契约、集成和端到端测试。
 

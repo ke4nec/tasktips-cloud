@@ -27,6 +27,7 @@ pub enum AccountStatus {
     Disabled,
     Pending,
     Deleting,
+    Deleted,
 }
 
 impl AccountStatus {
@@ -37,6 +38,7 @@ impl AccountStatus {
             Self::Disabled => "disabled",
             Self::Pending => "pending",
             Self::Deleting => "deleting",
+            Self::Deleted => "deleted",
         }
     }
 }

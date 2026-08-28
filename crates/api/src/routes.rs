@@ -8,19 +8,23 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
-use bytes::BytesMut;
+use bytes::Bytes;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::net::IpAddr;
 use std::time::Instant;
-use tasktips_application::{AccountStatus, ObjectKind, normalize_email, valid_password};
+use std::{net::IpAddr, path::PathBuf};
+use tasktips_application::{
+    AccountStatus, ObjectKind, normalize_email, valid_password, validate_account_purge_phase,
+    validate_restore_target,
+};
 use tasktips_object_store::ObjectStoreError;
 use tasktips_persistence::{
     DeviceProfile, NewInvitation, NewRefreshToken, NewSyncRevision, Persistence, PersistenceError,
     StoredPayload, SyncRecord, UserRecord, invitation_expiry, refresh_expiry,
 };
+use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -33,7 +37,7 @@ use crate::{
     cursor::{CursorClaims, CursorKind},
 };
 
-const ADMIN_REFRESH_COOKIE: &str = "tasktips_refresh";
+const ADMIN_REFRESH_COOKIE: &str = "tasktips_admin_refresh";
 const MAX_OPTIONAL_JSON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 
@@ -200,30 +204,6 @@ where
     }
 }
 
-pub struct ApiOptionalJson<T>(pub Option<T>);
-
-impl<S, T> FromRequest<S> for ApiOptionalJson<T>
-where
-    S: Send + Sync,
-    T: DeserializeOwned,
-{
-    type Rejection = ApiError;
-
-    async fn from_request(request: Request, _state: &S) -> Result<Self, Self::Rejection> {
-        let request_id = request_id(request.headers());
-        let bytes = to_bytes(request.into_body(), MAX_OPTIONAL_JSON_BYTES)
-            .await
-            .map_err(|_| ApiError::invalid("请求 JSON 格式或字段无效", request_id.clone()))?;
-        if bytes.is_empty() {
-            return Ok(Self(None));
-        }
-        serde_json::from_slice(&bytes)
-            .map(Some)
-            .map(Self)
-            .map_err(|_| ApiError::invalid("请求 JSON 格式或字段无效", request_id))
-    }
-}
-
 pub struct ApiPath<T>(pub T);
 
 impl<S, T> FromRequestParts<S> for ApiPath<T>
@@ -252,8 +232,22 @@ pub struct LoginRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminLoginRequest {
+    email: String,
+    password: String,
+    device_id: Uuid,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RefreshRequest {
-    refresh_token: Option<String>,
+    refresh_token: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminReauthRequest {
+    password: String,
 }
 
 #[derive(Deserialize)]
@@ -276,6 +270,13 @@ pub struct TokenResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AdminTokenResponse {
     access_token: String,
+    expires_in: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReauthResponse {
+    nonce: String,
     expires_in: i64,
 }
 
@@ -334,6 +335,21 @@ pub struct CreateInvitationResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountStatusRequest {
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PurgeProjectRequest {
+    password: String,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountPurgeRequest {
+    export_id: Option<Uuid>,
+    confirmed: bool,
     reason: String,
 }
 
@@ -409,10 +425,40 @@ pub struct AdminRestoreRequest {
     reason: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReasonRequest {
+    reason: String,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminRestoreQuery {
     project_id: Option<Uuid>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminJobQuery {
+    kind: Option<String>,
+    status: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminPageQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminTrendQuery {
+    days: Option<i32>,
 }
 
 pub async fn head_payload(
@@ -441,6 +487,7 @@ pub async fn head_payload(
         .map_err(|_| ApiError::internal(request_id))
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn put_payload(
     State(state): State<AppState>,
     ApiPath((project_id, content_hash)): ApiPath<(Uuid, String)>,
@@ -463,36 +510,92 @@ pub async fn put_payload(
         .map(str::to_owned)
         .ok_or_else(|| ApiError::invalid("Content-Type 缺失或无效", request_id.clone()))?;
     let (database, claims) = authenticate(&state, request.headers(), &request_id).await?;
+    let auth = state
+        .auth
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+    if !auth.allow_auth_request(
+        AuthOperation::PayloadUpload,
+        &format!("{}:{project_id}", claims.sub),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!("payload_upload:{}:{project_id}", claims.sub),
+        &request_id,
+    )
+    .await?;
     database
         .validate_sync_project(claims.sub, &claims.role, project_id)
         .await
         .map_err(|error| map_project_error(error, request_id.clone()))?;
     let object_store = sync_object_store(&state, &request_id)?;
 
+    let _temp_reservation = state
+        .upload_budget
+        .reserve(u64::try_from(content_length).unwrap_or(u64::MAX))
+        .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+    let temporary_dir =
+        std::env::var_os("TASKTIPS_UPLOAD_TEMP_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+    tokio::fs::create_dir_all(&temporary_dir)
+        .await
+        .map_err(|_| ApiError::unavailable(request_id.clone()))?;
+    let temporary_path = temporary_dir.join(format!(
+        "tasktips-payload-{}-{}.tmp",
+        claims.sub,
+        Uuid::new_v4()
+    ));
+    let mut temporary_options = tokio::fs::OpenOptions::new();
+    temporary_options.write(true).create_new(true);
+    #[cfg(unix)]
+    temporary_options.mode(0o600);
+    let mut temporary_file = temporary_options
+        .open(&temporary_path)
+        .await
+        .map_err(|_| ApiError::unavailable(request_id.clone()))?;
     let mut stream = request.into_body().into_data_stream();
-    let mut bytes = BytesMut::with_capacity(content_length);
     let mut hasher = Sha256::new();
+    let mut received = 0_usize;
     while let Some(chunk) = stream.next().await {
         let chunk =
-            chunk.map_err(|_| ApiError::invalid("payload 请求体读取失败", request_id.clone()))?;
-        if bytes.len().saturating_add(chunk.len()) > content_length
-            || bytes.len().saturating_add(chunk.len()) > MAX_PAYLOAD_BYTES
-        {
+            chunk.map_err(|_| ApiError::invalid("payload 请求体读取失败", request_id.clone()));
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&temporary_path).await;
+                return Err(error);
+            }
+        };
+        let next_size = received.saturating_add(chunk.len());
+        if next_size > content_length || next_size > MAX_PAYLOAD_BYTES {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
             return Err(ApiError::invalid(
                 "payload 大小与 Content-Length 不一致",
                 request_id,
             ));
         }
         hasher.update(&chunk);
-        bytes.extend_from_slice(&chunk);
+        if temporary_file.write_all(&chunk).await.is_err() {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return Err(ApiError::unavailable(request_id));
+        }
+        received = next_size;
     }
-    if bytes.len() != content_length {
+    if temporary_file.flush().await.is_err() {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err(ApiError::unavailable(request_id));
+    }
+    drop(temporary_file);
+    if received != content_length {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
         return Err(ApiError::invalid(
             "payload 大小与 Content-Length 不一致",
             request_id,
         ));
     }
     if hex::encode(hasher.finalize()) != content_hash {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "CONTENT_HASH_MISMATCH",
@@ -501,26 +604,35 @@ pub async fn put_payload(
             request_id,
         ));
     }
-    let payload_lock = database
+    let payload_lock = match database
         .acquire_payload_lock(project_id, &content_hash)
         .await
-        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    {
+        Ok(lock) => lock,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return Err(map_project_error(error, request_id));
+        }
+    };
     let payload = match object_store
-        .put_payload(
+        .put_payload_file(
             claims.sub,
             project_id,
             &content_hash,
             &media_type,
-            bytes.freeze(),
+            &temporary_path,
+            content_length as u64,
         )
         .await
     {
         Ok(payload) => payload,
         Err(error) => {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
             payload_lock.rollback().await;
             return Err(map_object_store(&error, request_id));
         }
     };
+    let _ = tokio::fs::remove_file(&temporary_path).await;
     state.metrics.payload_upload_bytes_total.fetch_add(
         u64::try_from(content_length).unwrap_or(u64::MAX),
         std::sync::atomic::Ordering::Relaxed,
@@ -594,6 +706,7 @@ pub async fn get_payload(
         .map_err(|_| ApiError::internal(request_id))
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn bootstrap(
     State(state): State<AppState>,
     ApiPath(project_id): ApiPath<Uuid>,
@@ -621,19 +734,69 @@ pub async fn bootstrap(
             )
         })
         .transpose()?;
-    let page = database
-        .bootstrap_page(
-            claims.sub,
-            &claims.role,
-            claims.device_id,
-            project_id,
-            page_claims.as_ref().map(|claims| claims.generation),
-            page_claims.as_ref().map(|claims| claims.change_sequence),
-            page_claims.as_ref().map_or(0, |claims| claims.offset),
-            limit,
-        )
-        .await
-        .map_err(|error| map_project_error(error, request_id.clone()))?;
+    let page = if let Some(page_claims) = page_claims.as_ref() {
+        let manifest_id = page_claims
+            .manifest_id
+            .ok_or_else(|| ApiError::cursor_invalid(request_id.clone()))?;
+        database
+            .bootstrap_manifest_page(
+                claims.sub,
+                &claims.role,
+                claims.device_id,
+                project_id,
+                manifest_id,
+                page_claims.offset,
+                limit,
+            )
+            .await
+            .map_err(|error| match error {
+                PersistenceError::NotFound => ApiError::cursor_invalid(request_id.clone()),
+                other => map_project_error(other, request_id.clone()),
+            })?
+    } else {
+        let manifest_id = Uuid::new_v4();
+        let manifest = database
+            .prepare_bootstrap_manifest(claims.sub, &claims.role, project_id, manifest_id)
+            .await
+            .map_err(|error| map_project_error(error, request_id.clone()))?;
+        let object_store = state
+            .object_store
+            .as_ref()
+            .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+        let stored = object_store
+            .put_bootstrap_manifest(
+                claims.sub,
+                project_id,
+                manifest.id,
+                &manifest.hash,
+                Bytes::from(manifest.bytes.clone()),
+            )
+            .await
+            .map_err(|error| map_object_store(&error, request_id.clone()))?;
+        database
+            .record_bootstrap_manifest(
+                claims.sub,
+                &claims.role,
+                project_id,
+                &manifest,
+                &stored.bucket,
+                &stored.key,
+            )
+            .await
+            .map_err(|error| map_project_error(error, request_id.clone()))?;
+        database
+            .bootstrap_manifest_page(
+                claims.sub,
+                &claims.role,
+                claims.device_id,
+                project_id,
+                manifest.id,
+                0,
+                limit,
+            )
+            .await
+            .map_err(|error| map_project_error(error, request_id.clone()))?
+    };
     let next_offset = page_claims.as_ref().map_or(0, |claims| claims.offset)
         + i64::try_from(page.records.len()).map_err(|_| ApiError::internal(request_id.clone()))?;
     let next_page_token = page
@@ -646,6 +809,7 @@ pub async fn bootstrap(
                 page.generation,
                 page.snapshot_sequence,
                 next_offset,
+                Some(page.manifest_id),
             ))
         })
         .transpose()
@@ -659,6 +823,7 @@ pub async fn bootstrap(
                 page.generation,
                 page.snapshot_sequence,
                 0,
+                None,
             ))
         })
         .transpose()
@@ -716,6 +881,7 @@ pub async fn pull(
             page.generation,
             page.next_sequence,
             0,
+            None,
         ))
         .map_err(|_| ApiError::internal(request_id))?;
     state
@@ -798,7 +964,7 @@ pub async fn push(
         .map_err(|_| ApiError::invalid("push 请求无法规范化", request_id.clone()))?;
     let request_hash = hex::encode(Sha256::digest(canonical_request));
     let push_result = database
-        .push(
+        .push_with_outcome(
             claims.sub,
             &claims.role,
             claims.device_id,
@@ -810,7 +976,8 @@ pub async fn push(
         )
         .await;
     match push_result {
-        Ok(response) => {
+        Ok(outcome) => {
+            let response = outcome.response;
             state
                 .metrics
                 .sync_push_total
@@ -832,50 +999,55 @@ pub async fn push(
             } else {
                 "succeeded"
             };
-            let _ = database
-                .record_sync_attempt(
-                    claims.sub,
-                    &claims.role,
-                    &tasktips_persistence::SyncAttemptRecord {
-                        id: Uuid::new_v4(),
-                        owner_user_id: claims.sub,
-                        project_id,
-                        device_id: Some(claims.device_id),
-                        operation: "push".to_owned(),
-                        status: status.to_owned(),
-                        error_code: None,
-                        item_count: i32::try_from(item_count).unwrap_or(i32::MAX),
-                        latency_ms: i32::try_from(started.elapsed().as_millis()).ok(),
-                        created_at: time::OffsetDateTime::now_utc(),
-                    },
-                )
-                .await;
+            if !outcome.replayed {
+                let _ = database
+                    .record_sync_attempt(
+                        claims.sub,
+                        &claims.role,
+                        &tasktips_persistence::SyncAttemptRecord {
+                            id: Uuid::new_v4(),
+                            owner_user_id: claims.sub,
+                            project_id,
+                            device_id: Some(claims.device_id),
+                            operation: "push".to_owned(),
+                            status: status.to_owned(),
+                            error_code: None,
+                            item_count: i32::try_from(item_count).unwrap_or(i32::MAX),
+                            latency_ms: i32::try_from(started.elapsed().as_millis()).ok(),
+                            created_at: time::OffsetDateTime::now_utc(),
+                        },
+                    )
+                    .await;
+            }
             Ok(Json(response))
         }
         Err(error) => {
+            let replayed = matches!(&error, PersistenceError::IdempotencyReplay { .. });
             state
                 .metrics
                 .sync_push_total
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let api_error = map_project_error(error, request_id);
-            let _ = database
-                .record_sync_attempt(
-                    claims.sub,
-                    &claims.role,
-                    &tasktips_persistence::SyncAttemptRecord {
-                        id: Uuid::new_v4(),
-                        owner_user_id: claims.sub,
-                        project_id,
-                        device_id: Some(claims.device_id),
-                        operation: "push".to_owned(),
-                        status: "failed".to_owned(),
-                        error_code: Some(api_error.code().to_owned()),
-                        item_count: 0,
-                        latency_ms: i32::try_from(started.elapsed().as_millis()).ok(),
-                        created_at: time::OffsetDateTime::now_utc(),
-                    },
-                )
-                .await;
+            if !replayed {
+                let _ = database
+                    .record_sync_attempt(
+                        claims.sub,
+                        &claims.role,
+                        &tasktips_persistence::SyncAttemptRecord {
+                            id: Uuid::new_v4(),
+                            owner_user_id: claims.sub,
+                            project_id,
+                            device_id: Some(claims.device_id),
+                            operation: "push".to_owned(),
+                            status: "failed".to_owned(),
+                            error_code: Some(api_error.code().to_owned()),
+                            item_count: 0,
+                            latency_ms: i32::try_from(started.elapsed().as_millis()).ok(),
+                            created_at: time::OffsetDateTime::now_utc(),
+                        },
+                    )
+                    .await;
+            }
             Err(api_error)
         }
     }
@@ -1020,6 +1192,9 @@ pub async fn create_restore(
 ) -> Result<(StatusCode, Json<tasktips_persistence::RestoreJobRecord>), ApiError> {
     let request_id = request_id(&headers);
     let reason = valid_text(&request.reason, 512, "恢复原因无效", &request_id)?;
+    if validate_restore_target(request.snapshot_id, request.target_change_sequence).is_err() {
+        return Err(ApiError::invalid("恢复目标无效", request_id));
+    }
     let (database, claims) = authenticate(&state, &headers, &request_id).await?;
     let job = database
         .enqueue_restore(
@@ -1054,6 +1229,29 @@ pub async fn get_restore(
     Ok(Json(job))
 }
 
+pub async fn cancel_restore(
+    State(state): State<AppState>,
+    ApiPath((project_id, restore_id)): ApiPath<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<ReasonRequest>,
+) -> Result<Json<tasktips_persistence::RestoreJobRecord>, ApiError> {
+    let request_id = request_id(&headers);
+    let reason = valid_text(&request.reason, 512, "取消原因无效", &request_id)?;
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let job = database
+        .cancel_restore(
+            claims.sub,
+            &claims.role,
+            project_id,
+            restore_id,
+            reason,
+            &request_id,
+        )
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok(Json(job))
+}
+
 pub async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1066,6 +1264,12 @@ pub async fn login(
     if !auth.allow_auth_request(AuthOperation::Login, &auth_rate_limit_key(&headers, &email)) {
         return Err(ApiError::rate_limited(request_id));
     }
+    enforce_shared_rate_limit(
+        database,
+        &format!("login:{}", auth_rate_limit_key(&headers, &email)),
+        &request_id,
+    )
+    .await?;
     let user = database
         .find_login_user(&email)
         .await
@@ -1087,6 +1291,9 @@ pub async fn login(
     if !valid {
         return Err(ApiError::authentication(request_id));
     }
+    if user.role != "user" {
+        return Err(ApiError::authentication(request_id));
+    }
     if user.status != "active" {
         return Err(account_disabled(request_id));
     }
@@ -1106,7 +1313,7 @@ pub async fn login(
             PersistenceError::NotFound => ApiError::authentication(request_id.clone()),
             other => map_persistence(other, request_id.clone()),
         })?;
-    token_response(
+    user_token_response(
         auth,
         &session.user,
         session.device_id,
@@ -1115,10 +1322,80 @@ pub async fn login(
     )
 }
 
+pub async fn admin_login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<AdminLoginRequest>,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let email = normalize_email(&request.email)
+        .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
+    let (database, auth) = services(&state, &request_id)?;
+    if !auth.allow_auth_request(
+        AuthOperation::AdminLogin,
+        &auth_rate_limit_key(&headers, &email),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!("admin_login:{}", auth_rate_limit_key(&headers, &email)),
+        &request_id,
+    )
+    .await?;
+    let user = database
+        .find_login_user(&email)
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    let Some(user) = user else {
+        run_password_task(request.password, |password| {
+            hash_password(&password).map(|_| true)
+        })
+        .await
+        .map_err(|_| ApiError::authentication(request_id.clone()))?;
+        return Err(ApiError::authentication(request_id));
+    };
+    let password_hash = user.password_hash.clone();
+    let valid = run_password_task(request.password, move |password| {
+        Ok(verify_password(&password, &password_hash))
+    })
+    .await
+    .map_err(|_| ApiError::internal(request_id.clone()))?;
+    if !valid || user.role != "system_admin" {
+        return Err(ApiError::authentication(request_id));
+    }
+    if user.status != "active" {
+        return Err(account_disabled(request_id));
+    }
+    let opaque = auth
+        .issue_refresh_token()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let refresh = NewRefreshToken {
+        token_hash: opaque.hash,
+        family_id: Uuid::new_v4(),
+        expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
+    };
+    let session = database
+        .create_login_session(user.id, request.device_id, &refresh, &request_id)
+        .await
+        .map_err(|error| match error {
+            PersistenceError::NotFound => ApiError::authentication(request_id.clone()),
+            other => map_persistence(other, request_id.clone()),
+        })?;
+    admin_token_response(
+        auth,
+        &session.user,
+        session.device_id,
+        &opaque.raw,
+        &request_id,
+    )
+}
+
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
-    ApiOptionalJson(request): ApiOptionalJson<RefreshRequest>,
+    ApiJson(request): ApiJson<RefreshRequest>,
 ) -> Result<Response, ApiError> {
     let request_id = request_id(&headers);
     let (database, auth) = services(&state, &request_id)?;
@@ -1128,10 +1405,65 @@ pub async fn refresh(
     ) {
         return Err(ApiError::rate_limited(request_id));
     }
-    let refresh_token = request
-        .and_then(|request| request.refresh_token)
-        .filter(|token| !token.is_empty())
-        .or_else(|| refresh_token_from_cookie(&headers))
+    enforce_shared_rate_limit(
+        database,
+        &format!("refresh:{}", auth_rate_limit_key(&headers, "refresh")),
+        &request_id,
+    )
+    .await?;
+    let refresh_token = request.refresh_token;
+    if refresh_token.is_empty() {
+        return Err(ApiError::authentication(request_id));
+    }
+    let opaque = auth
+        .issue_refresh_token()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let replacement = NewRefreshToken {
+        token_hash: opaque.hash,
+        family_id: Uuid::new_v4(),
+        expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
+    };
+    let session = database
+        .rotate_refresh_token_for_role(
+            &opaque_token_hash(&refresh_token),
+            &replacement,
+            "user",
+            &request_id,
+        )
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    user_token_response(
+        auth,
+        &session.user,
+        session.device_id,
+        opaque.raw,
+        &request_id,
+    )
+}
+
+pub async fn admin_refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let (database, auth) = services(&state, &request_id)?;
+    if !auth.allow_auth_request(
+        AuthOperation::AdminRefresh,
+        &auth_rate_limit_key(&headers, "admin-refresh"),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!(
+            "admin_refresh:{}",
+            auth_rate_limit_key(&headers, "admin-refresh")
+        ),
+        &request_id,
+    )
+    .await?;
+    let refresh_token = refresh_token_from_cookie(&headers)
         .ok_or_else(|| ApiError::authentication(request_id.clone()))?;
     let opaque = auth
         .issue_refresh_token()
@@ -1142,18 +1474,19 @@ pub async fn refresh(
         expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
     };
     let session = database
-        .rotate_refresh_token(
+        .rotate_refresh_token_for_role(
             &opaque_token_hash(&refresh_token),
             &replacement,
+            "system_admin",
             &request_id,
         )
         .await
         .map_err(|error| map_persistence(error, request_id.clone()))?;
-    token_response(
+    admin_token_response(
         auth,
         &session.user,
         session.device_id,
-        opaque.raw,
+        &opaque.raw,
         &request_id,
     )
 }
@@ -1168,12 +1501,88 @@ pub async fn logout(
         .logout_device(claims.sub, &claims.role, claims.device_id, &request_id)
         .await
         .map_err(|error| map_persistence(error, request_id.clone()))?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+pub async fn admin_logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    if refresh_token_from_cookie(&headers).is_none() {
+        return Err(ApiError::authentication(request_id));
+    }
+    database
+        .logout_device(claims.sub, &claims.role, claims.device_id, &request_id)
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    database
+        .revoke_reauth_nonces(claims.sub, claims.device_id)
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        refresh_cookie_header("", 0, &request_id)?,
+        admin_refresh_cookie_header("", 0, &request_id)?,
     );
     Ok(response)
+}
+
+pub async fn admin_reauth(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<AdminReauthRequest>,
+) -> Result<Json<ReauthResponse>, ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let (database, auth) = services(&state, &request_id)?;
+    let (_, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    if !auth.allow_auth_request(
+        AuthOperation::AdminReauth,
+        &auth_rate_limit_key(&headers, "admin-reauth"),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!(
+            "admin_reauth:{}",
+            auth_rate_limit_key(&headers, "admin-reauth")
+        ),
+        &request_id,
+    )
+    .await?;
+    let user = database
+        .current_user(claims.sub, &claims.role)
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    let password_hash = user.password_hash.clone();
+    let valid = run_password_task(request.password, move |password| {
+        Ok(verify_password(&password, &password_hash))
+    })
+    .await
+    .map_err(|_| ApiError::internal(request_id.clone()))?;
+    if !valid {
+        return Err(ApiError::authentication(request_id));
+    }
+    let (nonce, expires_in) = auth
+        .issue_reauth_nonce()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    database
+        .create_reauth_nonce(
+            claims.sub,
+            claims.device_id,
+            &nonce.hash,
+            time::OffsetDateTime::now_utc() + time::Duration::seconds(expires_in),
+        )
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    Ok(Json(ReauthResponse {
+        nonce: nonce.raw,
+        expires_in,
+    }))
 }
 
 pub async fn activate_invitation(
@@ -1189,6 +1598,15 @@ pub async fn activate_invitation(
     ) {
         return Err(ApiError::rate_limited(request_id));
     }
+    enforce_shared_rate_limit(
+        database,
+        &format!(
+            "invitation_activation:{}",
+            auth_rate_limit_key(&headers, "invitation")
+        ),
+        &request_id,
+    )
+    .await?;
     if !valid_password(&request.password) {
         return Err(ApiError::invalid("密码至少需要 12 个字符", request_id));
     }
@@ -1220,7 +1638,7 @@ pub async fn activate_invitation(
             }
             other => map_persistence(other, request_id.clone()),
         })?;
-    token_response(
+    user_token_response(
         auth,
         &session.user,
         session.device_id,
@@ -1352,6 +1770,46 @@ pub async fn disable_project(
     Ok(Json(project))
 }
 
+pub async fn purge_project(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<PurgeProjectRequest>,
+) -> Result<(StatusCode, Json<tasktips_persistence::JobRecord>), ApiError> {
+    let request_id = request_id(&headers);
+    let reason = valid_text(&request.reason, 512, "清除原因无效", &request_id)?;
+    let (database, claims) = authenticate(&state, &headers, &request_id).await?;
+    let auth = state
+        .auth
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+    if !auth.allow_auth_request(
+        AuthOperation::Purge,
+        &format!("{}:{}", claims.sub, auth_rate_limit_key(&headers, "purge")),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(database, &format!("purge:{}", claims.sub), &request_id).await?;
+    let user = database
+        .current_user(claims.sub, &claims.role)
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    let password_hash = user.password_hash;
+    let valid = run_password_task(request.password, move |password| {
+        Ok(verify_password(&password, &password_hash))
+    })
+    .await
+    .map_err(|_| ApiError::internal(request_id.clone()))?;
+    if !valid {
+        return Err(ApiError::authentication(request_id));
+    }
+    let job = database
+        .enqueue_project_purge(claims.sub, &claims.role, project_id, reason, &request_id)
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
 pub async fn list_devices(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1430,6 +1888,7 @@ pub async fn create_invitation(
     ApiJson(request): ApiJson<CreateInvitationRequest>,
 ) -> Result<(StatusCode, Json<CreateInvitationResponse>), ApiError> {
     let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
     let email = normalize_email(&request.email)
         .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
@@ -1464,45 +1923,128 @@ pub async fn create_invitation(
     ))
 }
 
+pub async fn admin_list_invitations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let (invitations, has_more) = database
+        .admin_list_invitations_page(claims.sub, limit, offset)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": invitations, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
+}
+
+pub async fn admin_revoke_invitation(
+    State(state): State<AppState>,
+    ApiPath(invitation_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<ReasonRequest>,
+) -> Result<StatusCode, ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let reason = valid_text(&request.reason, 500, "操作原因无效", &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    database
+        .admin_revoke_invitation(claims.sub, invitation_id, reason, &request_id)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn admin_resend_invitation(
+    State(state): State<AppState>,
+    ApiPath(invitation_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<CreateInvitationResponse>, ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let auth = state
+        .auth
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+    let token = auth
+        .issue_invitation_token()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let record = database
+        .admin_resend_invitation(
+            claims.sub,
+            invitation_id,
+            &token.hash,
+            invitation_expiry(),
+            &request_id,
+        )
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(CreateInvitationResponse {
+        id: record.id,
+        email: record.email,
+        invitation_token: token.raw,
+        expires_at: record.expires_at,
+    }))
+}
+
 pub async fn admin_list_users(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let users = database
-        .admin_list_users(claims.sub)
+    let (users, has_more) = database
+        .admin_list_users_page(claims.sub, limit, offset)
         .await
         .map_err(|error| map_persistence(error, request_id))?;
-    Ok(Json(serde_json::json!({"items": users})))
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": users, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
 }
 
 pub async fn admin_list_projects(
     State(state): State<AppState>,
     ApiPath(user_id): ApiPath<Uuid>,
     headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let projects = database
-        .admin_list_projects(claims.sub, user_id)
+    let (projects, has_more) = database
+        .admin_list_projects_page(claims.sub, user_id, limit, offset)
         .await
         .map_err(|error| map_persistence(error, request_id))?;
-    Ok(Json(serde_json::json!({"items": projects})))
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": projects, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
 }
 
 pub async fn admin_list_devices(
     State(state): State<AppState>,
     ApiPath(user_id): ApiPath<Uuid>,
     headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let devices = database
-        .admin_list_devices(claims.sub, user_id)
+    let (devices, has_more) = database
+        .admin_list_devices_page(claims.sub, user_id, limit, offset)
         .await
         .map_err(|error| map_persistence(error, request_id))?;
-    Ok(Json(serde_json::json!({"items": devices})))
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": devices, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
 }
 
 pub async fn admin_overview(
@@ -1550,12 +2092,47 @@ pub async fn admin_restore_jobs(
     Query(query): Query<AdminRestoreQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let jobs = database
-        .admin_list_restore_jobs(claims.sub, query.project_id)
+    let (jobs, has_more) = database
+        .admin_list_restore_jobs_page(claims.sub, query.project_id, limit, offset)
         .await
         .map_err(|error| map_persistence(error, request_id))?;
-    Ok(Json(json!({"items": jobs})))
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": jobs, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
+}
+
+pub async fn admin_jobs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminJobQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let kind = query.kind.as_deref().map(str::trim);
+    if kind.is_some_and(|value| {
+        !matches!(
+            value,
+            "project_purge" | "account_purge" | "snapshot_cleanup" | "statistics"
+        )
+    }) {
+        return Err(ApiError::invalid("jobs kind 无效", request_id));
+    }
+    let status = query.status.as_deref().map(str::trim);
+    if status.is_some_and(|value| !matches!(value, "queued" | "running" | "succeeded" | "failed")) {
+        return Err(ApiError::invalid("jobs status 无效", request_id));
+    }
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let (jobs, has_more) = database
+        .admin_list_jobs_page(claims.sub, kind, status, limit, offset)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": jobs, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
 }
 
 pub async fn admin_create_restore(
@@ -1565,7 +2142,11 @@ pub async fn admin_create_restore(
     ApiJson(request): ApiJson<AdminRestoreRequest>,
 ) -> Result<(StatusCode, Json<tasktips_persistence::RestoreJobRecord>), ApiError> {
     let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
     let reason = valid_text(&request.reason, 512, "恢复原因无效", &request_id)?;
+    if validate_restore_target(request.snapshot_id, request.target_change_sequence).is_err() {
+        return Err(ApiError::invalid("恢复目标无效", request_id));
+    }
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
     let job = database
         .admin_enqueue_restore(
@@ -1585,30 +2166,128 @@ pub async fn admin_create_restore(
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
+pub async fn reopen_restore_project(
+    State(state): State<AppState>,
+    ApiPath(project_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<ReasonRequest>,
+) -> Result<StatusCode, ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let reason = valid_text(&request.reason, 500, "操作原因无效", &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    database
+        .reopen_failed_restore(claims.sub, project_id, reason, &request_id)
+        .await
+        .map_err(|error| map_project_error(error, request_id))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn admin_sync_attempts(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let attempts = database
-        .admin_list_sync_attempts(claims.sub)
+    let (attempts, has_more) = database
+        .admin_list_sync_attempts_page(claims.sub, limit, offset)
         .await
         .map_err(|error| map_persistence(error, request_id))?;
-    Ok(Json(json!({"items": attempts})))
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": attempts, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
 }
 
 pub async fn admin_audit_events(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let (events, has_more) = database
+        .admin_list_audit_events_page(claims.sub, limit, offset)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": events, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
+}
+
+pub async fn admin_trends(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminTrendQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let days = query.days.unwrap_or(30);
+    if !(1..=90).contains(&days) {
+        return Err(ApiError::invalid("趋势天数无效", request_id));
+    }
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let points = database
+        .admin_sync_trends(claims.sub, days)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(json!({"items": points, "days": days})))
+}
+
+pub async fn admin_audit_events_csv(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     let request_id = request_id(&headers);
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
     let events = database
         .admin_list_audit_events(claims.sub)
         .await
-        .map_err(|error| map_persistence(error, request_id))?;
-    Ok(Json(json!({"items": events})))
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    let mut csv =
+        String::from("id,action,actorUserId,subjectUserId,projectId,requestId,createdAt\n");
+    for event in events {
+        use std::fmt::Write as _;
+        writeln!(
+            csv,
+            "{},{},{},{},{},{},{}",
+            event.id,
+            csv_field(&event.action),
+            csv_optional_uuid(event.actor_user_id),
+            csv_optional_uuid(event.subject_user_id),
+            csv_optional_uuid(event.project_id),
+            csv_field(event.request_id.as_deref().unwrap_or_default()),
+            csv_field(&event.created_at.to_string()),
+        )
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    }
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/csv; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"audit-events.csv\"",
+        )
+        .body(Body::from(csv))
+        .map_err(|_| ApiError::internal(request_id))
+}
+
+fn csv_optional_uuid(value: Option<Uuid>) -> String {
+    value.map_or_else(String::new, |value| value.to_string())
+}
+
+fn csv_field(value: &str) -> String {
+    if value
+        .bytes()
+        .any(|byte| matches!(byte, b',' | b'"' | b'\r' | b'\n'))
+    {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
 }
 
 pub async fn disable_account(
@@ -1629,6 +2308,64 @@ pub async fn enable_account(
     set_account_status(state, headers, user_id, request, AccountStatus::Active).await
 }
 
+pub async fn purge_account(
+    State(state): State<AppState>,
+    ApiPath(user_id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<AccountPurgeRequest>,
+) -> Result<(StatusCode, Json<tasktips_persistence::AccountPurgeResponse>), ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    if validate_account_purge_phase(request.export_id, request.confirmed).is_err() {
+        return Err(ApiError::invalid("账号清除确认参数无效", request_id));
+    }
+    let reason = valid_text(&request.reason, 512, "清除原因无效", &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let auth = state
+        .auth
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+    if !auth.allow_auth_request(
+        AuthOperation::Purge,
+        &format!(
+            "{}:{}",
+            claims.sub,
+            auth_rate_limit_key(&headers, "account-purge")
+        ),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!("account_purge:{}", claims.sub),
+        &request_id,
+    )
+    .await?;
+    let nonce = headers
+        .get("x-reauth-nonce")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::authentication(request_id.clone()))?;
+    let consumed = database
+        .consume_reauth_nonce(claims.sub, claims.device_id, &opaque_token_hash(nonce))
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    if !consumed {
+        return Err(ApiError::authentication(request_id));
+    }
+    let response = if let Some(export_id) = request.export_id {
+        database
+            .confirm_account_purge(claims.sub, user_id, export_id, reason, &request_id)
+            .await
+    } else {
+        database
+            .request_account_purge_export(claims.sub, user_id, reason, &request_id)
+            .await
+    }
+    .map_err(|error| map_persistence(error, request_id))?;
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
 async fn set_account_status(
     state: AppState,
     headers: HeaderMap,
@@ -1637,6 +2374,7 @@ async fn set_account_status(
     status: AccountStatus,
 ) -> Result<StatusCode, ApiError> {
     let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
     let reason = valid_text(&request.reason, 500, "操作原因无效", &request_id)?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
     if claims.sub == user_id && status != AccountStatus::Active {
@@ -1650,6 +2388,18 @@ async fn set_account_status(
 }
 
 async fn authenticate<'a>(
+    state: &'a AppState,
+    headers: &HeaderMap,
+    request_id: &str,
+) -> Result<(&'a Persistence, AccessClaims), ApiError> {
+    let (database, claims) = authenticate_access(state, headers, request_id).await?;
+    if claims.role != "user" {
+        return Err(ApiError::authorization(request_id.to_owned()));
+    }
+    Ok((database, claims))
+}
+
+async fn authenticate_access<'a>(
     state: &'a AppState,
     headers: &HeaderMap,
     request_id: &str,
@@ -1679,7 +2429,7 @@ async fn authenticate_admin<'a>(
     headers: &HeaderMap,
     request_id: &str,
 ) -> Result<(&'a Persistence, AccessClaims), ApiError> {
-    let (database, claims) = authenticate(state, headers, request_id).await?;
+    let (database, claims) = authenticate_access(state, headers, request_id).await?;
     if claims.role != "system_admin" {
         return Err(ApiError::authorization(request_id.to_owned()));
     }
@@ -1696,7 +2446,7 @@ fn services<'a>(
     }
 }
 
-fn token_response(
+fn user_token_response(
     auth: &AuthService,
     user: &UserRecord,
     device_id: Uuid,
@@ -1706,25 +2456,34 @@ fn token_response(
     let access = auth
         .issue_access_token(user.id, &user.role, device_id)
         .map_err(|_| ApiError::internal(request_id.to_owned()))?;
-    if user.role == "system_admin" {
-        let mut response = Json(AdminTokenResponse {
-            access_token: access.token,
-            expires_in: access.expires_in,
-        })
-        .into_response();
-        response.headers_mut().insert(
-            header::SET_COOKIE,
-            refresh_cookie_header(&refresh_token, auth.refresh_ttl_seconds(), request_id)?,
-        );
-        Ok(response)
-    } else {
-        Ok(Json(TokenResponse {
-            access_token: access.token,
-            refresh_token,
-            expires_in: access.expires_in,
-        })
-        .into_response())
-    }
+    Ok(Json(TokenResponse {
+        access_token: access.token,
+        refresh_token,
+        expires_in: access.expires_in,
+    })
+    .into_response())
+}
+
+fn admin_token_response(
+    auth: &AuthService,
+    user: &UserRecord,
+    device_id: Uuid,
+    refresh_token: &str,
+    request_id: &str,
+) -> Result<Response, ApiError> {
+    let access = auth
+        .issue_access_token(user.id, &user.role, device_id)
+        .map_err(|_| ApiError::internal(request_id.to_owned()))?;
+    let mut response = Json(AdminTokenResponse {
+        access_token: access.token,
+        expires_in: access.expires_in,
+    })
+    .into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        admin_refresh_cookie_header(refresh_token, auth.refresh_ttl_seconds(), request_id)?,
+    );
+    Ok(response)
 }
 
 fn refresh_token_from_cookie(headers: &HeaderMap) -> Option<String> {
@@ -1753,15 +2512,53 @@ fn auth_rate_limit_key(headers: &HeaderMap, identity: &str) -> String {
     format!("{client}:{}", hex::encode(opaque_token_hash(identity)))
 }
 
-fn refresh_cookie_header(
+async fn enforce_shared_rate_limit(
+    database: &Persistence,
+    bucket_key: &str,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    let allowed = database
+        .consume_distributed_rate_limit(bucket_key, 120, time::Duration::minutes(1))
+        .await
+        .map_err(|error| map_persistence(error, request_id.to_owned()))?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(ApiError::rate_limited(request_id.to_owned()))
+    }
+}
+
+fn admin_refresh_cookie_header(
     token: &str,
     max_age_seconds: i64,
     request_id: &str,
 ) -> Result<HeaderValue, ApiError> {
     let value = format!(
-        "{ADMIN_REFRESH_COOKIE}={token}; Max-Age={max_age_seconds}; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Strict"
+        "{ADMIN_REFRESH_COOKIE}={token}; Max-Age={max_age_seconds}; Path=/api/v1/admin/auth; HttpOnly; Secure; SameSite=Strict"
     );
     HeaderValue::from_str(&value).map_err(|_| ApiError::internal(request_id.to_owned()))
+}
+
+fn validate_admin_origin(
+    state: &AppState,
+    headers: &HeaderMap,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    let Some(expected) = state.admin_origin.as_deref() else {
+        return Err(ApiError::internal(request_id.to_owned()));
+    };
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    if origin != Some(expected)
+        || headers
+            .get("sec-fetch-site")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("cross-site"))
+    {
+        return Err(ApiError::authorization(request_id.to_owned()));
+    }
+    Ok(())
 }
 
 async fn run_password_task<T, F>(password: String, operation: F) -> Result<T, AuthError>
@@ -1848,6 +2645,19 @@ fn valid_limit(
     Ok(value)
 }
 
+fn admin_page_bounds(
+    limit: Option<i64>,
+    offset: Option<i64>,
+    request_id: &str,
+) -> Result<(i64, i64), ApiError> {
+    let limit = valid_limit(limit, 100, 500, request_id)?;
+    let offset = offset.unwrap_or(0);
+    if !(0..=1_000_000).contains(&offset) {
+        return Err(ApiError::invalid("分页 offset 无效", request_id.to_owned()));
+    }
+    Ok((limit, offset))
+}
+
 fn cursor_claims(
     kind: CursorKind,
     project_id: Uuid,
@@ -1855,6 +2665,7 @@ fn cursor_claims(
     generation: i64,
     change_sequence: i64,
     offset: i64,
+    manifest_id: Option<Uuid>,
 ) -> CursorClaims {
     CursorClaims {
         schema_version: 1,
@@ -1864,6 +2675,7 @@ fn cursor_claims(
         generation,
         change_sequence,
         offset,
+        manifest_id,
         issued_at: 0,
     }
 }
@@ -1885,6 +2697,7 @@ fn verify_cursor(
         || claims.generation <= 0
         || claims.change_sequence < 0
         || claims.offset < 0
+        || (kind == CursorKind::Pull && claims.manifest_id.is_some())
     {
         return Err(ApiError::cursor_invalid(request_id.to_owned()));
     }
@@ -2041,6 +2854,7 @@ fn map_project_error(error: PersistenceError, request_id: String) -> ApiError {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn map_persistence(error: PersistenceError, request_id: String) -> ApiError {
     match error {
         PersistenceError::AccountDisabled => account_disabled(request_id),
@@ -2109,6 +2923,9 @@ fn map_persistence(error: PersistenceError, request_id: String) -> ApiError {
             false,
             request_id,
         ),
+        PersistenceError::IdempotencyReplay { response, status } => {
+            map_idempotency_replay(&response, status, request_id)
+        }
         PersistenceError::PayloadNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "PAYLOAD_NOT_FOUND",
@@ -2120,10 +2937,65 @@ fn map_persistence(error: PersistenceError, request_id: String) -> ApiError {
             ApiError::invalid("payload 与对象类型不兼容", request_id)
         }
         PersistenceError::InvalidRestoreTarget => ApiError::invalid("恢复目标无效", request_id),
+        PersistenceError::RestoreNotReopenable => ApiError::new(
+            StatusCode::CONFLICT,
+            "RESTORE_NOT_REOPENABLE",
+            "项目尚未通过恢复失败校验，不能重新开放",
+            false,
+            request_id,
+        ),
+        PersistenceError::RestoreCancelled => ApiError::new(
+            StatusCode::CONFLICT,
+            "RESTORE_CANCELLED",
+            "恢复任务已取消",
+            false,
+            request_id,
+        ),
+        PersistenceError::AccountPurgeNotReady => ApiError::new(
+            StatusCode::CONFLICT,
+            "ACCOUNT_PURGE_EXPORT_NOT_READY",
+            "账号导出尚未完成或已过期",
+            false,
+            request_id,
+        ),
         PersistenceError::Database(database_error) => {
             drop(database_error);
             ApiError::internal(request_id)
         }
+    }
+}
+
+fn map_idempotency_replay(
+    response: &serde_json::Value,
+    _status: i16,
+    request_id: String,
+) -> ApiError {
+    let code = response.get("code").and_then(serde_json::Value::as_str);
+    let details = response.get("details").cloned();
+    match code {
+        Some("GENERATION_MISMATCH") => ApiError::new(
+            StatusCode::CONFLICT,
+            "GENERATION_MISMATCH",
+            "项目 generation 已变化，请重新 bootstrap",
+            false,
+            request_id,
+        )
+        .with_details(details.unwrap_or_else(|| json!({}))),
+        Some("CURSOR_INVALID") => ApiError::new(
+            StatusCode::CONFLICT,
+            "CURSOR_INVALID",
+            "当前设备必须先完成 bootstrap",
+            false,
+            request_id,
+        ),
+        Some("PROJECT_MAINTENANCE") => ApiError::new(
+            StatusCode::LOCKED,
+            "PROJECT_MAINTENANCE",
+            "项目当前处于维护状态",
+            true,
+            request_id,
+        ),
+        _ => ApiError::internal(request_id),
     }
 }
 

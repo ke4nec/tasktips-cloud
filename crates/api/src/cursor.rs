@@ -26,6 +26,8 @@ pub struct CursorClaims {
     pub generation: i64,
     pub change_sequence: i64,
     pub offset: i64,
+    #[serde(default)]
+    pub manifest_id: Option<Uuid>,
     pub issued_at: i64,
 }
 
@@ -139,6 +141,7 @@ mod tests {
             generation: 3,
             change_sequence: 42,
             offset: 0,
+            manifest_id: None,
             issued_at: 0,
         };
         let cursor = signer.sign(claims.clone()).expect("cursor should sign");

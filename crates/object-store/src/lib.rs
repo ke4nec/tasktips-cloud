@@ -1,7 +1,7 @@
 use aws_sdk_s3::{Client as S3Client, error::ProvideErrorMetadata, primitives::ByteStream};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::{collections::HashSet, path::Path};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -128,6 +128,8 @@ impl ObjectStore {
         }
         let final_key = payload_key(owner_user_id, project_id, expected_hash);
         if let Some(existing) = self.head_key(&final_key).await? {
+            self.verify_key_hash(&final_key, expected_hash, existing.0)
+                .await?;
             return Ok(PayloadInfo {
                 bucket: self.bucket.clone(),
                 key: final_key,
@@ -178,12 +180,154 @@ impl ObjectStore {
         if size != u64::try_from(bytes.len()).map_err(|_| ObjectStoreError::Backend)? {
             return Err(ObjectStoreError::Backend);
         }
+        self.verify_key_hash(&final_key, expected_hash, size)
+            .await?;
         Ok(PayloadInfo {
             bucket: self.bucket.clone(),
             key: final_key,
             content_hash: expected_hash.to_owned(),
             size,
             media_type: stored_media_type.unwrap_or_else(|| media_type.to_owned()),
+        })
+    }
+
+    /// Streams a previously hashed payload file into the immutable object layout.
+    ///
+    /// The caller owns the temporary file and must remove it after this method returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns a hash mismatch or backend error without exposing object keys.
+    pub async fn put_payload_file(
+        &self,
+        owner_user_id: Uuid,
+        project_id: Uuid,
+        expected_hash: &str,
+        media_type: &str,
+        path: impl AsRef<Path>,
+        size: u64,
+    ) -> Result<PayloadInfo, ObjectStoreError> {
+        let final_key = payload_key(owner_user_id, project_id, expected_hash);
+        if let Some(existing) = self.head_key(&final_key).await? {
+            self.verify_key_hash(&final_key, expected_hash, existing.0)
+                .await?;
+            return Ok(PayloadInfo {
+                bucket: self.bucket.clone(),
+                key: final_key,
+                content_hash: expected_hash.to_owned(),
+                size: existing.0,
+                media_type: existing.1.unwrap_or_else(|| media_type.to_owned()),
+            });
+        }
+
+        let temporary_key = format!(
+            "users/{owner_user_id}/projects/{project_id}/uploads/{}",
+            Uuid::new_v4()
+        );
+        let body = ByteStream::from_path(path)
+            .await
+            .map_err(|_| ObjectStoreError::Backend)?;
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&temporary_key)
+            .content_length(i64::try_from(size).map_err(|_| ObjectStoreError::Backend)?)
+            .content_type(media_type)
+            .body(body)
+            .send()
+            .await
+            .map_err(|_| ObjectStoreError::Backend)?;
+
+        let copy_result = self
+            .client
+            .copy_object()
+            .bucket(&self.bucket)
+            .key(&final_key)
+            .copy_source(format!("{}/{}", self.bucket, temporary_key))
+            .content_type(media_type)
+            .metadata_directive(aws_sdk_s3::types::MetadataDirective::Replace)
+            .send()
+            .await;
+        let _ = self
+            .client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(&temporary_key)
+            .send()
+            .await;
+        copy_result.map_err(|_| ObjectStoreError::Backend)?;
+
+        let (stored_size, stored_media_type) = self
+            .head_key(&final_key)
+            .await?
+            .ok_or(ObjectStoreError::Backend)?;
+        if stored_size != size {
+            return Err(ObjectStoreError::Backend);
+        }
+        self.verify_key_hash(&final_key, expected_hash, stored_size)
+            .await?;
+        Ok(PayloadInfo {
+            bucket: self.bucket.clone(),
+            key: final_key,
+            content_hash: expected_hash.to_owned(),
+            size: stored_size,
+            media_type: stored_media_type.unwrap_or_else(|| media_type.to_owned()),
+        })
+    }
+
+    /// Streams an account export archive into its immutable owner-scoped key.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn put_export_file(
+        &self,
+        owner_user_id: Uuid,
+        export_id: Uuid,
+        expected_hash: &str,
+        path: impl AsRef<Path>,
+        size: u64,
+    ) -> Result<PayloadInfo, ObjectStoreError> {
+        let key = export_key(owner_user_id, export_id);
+        if let Some(existing) = self.head_key(&key).await? {
+            if existing.0 != size {
+                return Err(ObjectStoreError::Backend);
+            }
+            self.verify_key_hash(&key, expected_hash, existing.0)
+                .await?;
+            return Ok(PayloadInfo {
+                bucket: self.bucket.clone(),
+                key,
+                content_hash: expected_hash.to_owned(),
+                size: existing.0,
+                media_type: existing.1.unwrap_or_else(|| "application/zstd".to_owned()),
+            });
+        }
+        let body = ByteStream::from_path(path)
+            .await
+            .map_err(|_| ObjectStoreError::Backend)?;
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .content_length(i64::try_from(size).map_err(|_| ObjectStoreError::Backend)?)
+            .content_type("application/zstd")
+            .body(body)
+            .send()
+            .await
+            .map_err(|_| ObjectStoreError::Backend)?;
+        let (stored_size, media_type) = self
+            .head_key(&key)
+            .await?
+            .ok_or(ObjectStoreError::Backend)?;
+        if stored_size != size {
+            return Err(ObjectStoreError::Backend);
+        }
+        self.verify_key_hash(&key, expected_hash, stored_size)
+            .await?;
+        Ok(PayloadInfo {
+            bucket: self.bucket.clone(),
+            key,
+            content_hash: expected_hash.to_owned(),
+            size: stored_size,
+            media_type: media_type.unwrap_or_else(|| "application/zstd".to_owned()),
         })
     }
 
@@ -210,6 +354,8 @@ impl ObjectStore {
             if existing.0 != u64::try_from(bytes.len()).map_err(|_| ObjectStoreError::Backend)? {
                 return Err(ObjectStoreError::Backend);
             }
+            self.verify_key_hash(&key, expected_hash, existing.0)
+                .await?;
             return Ok(PayloadInfo {
                 bucket: self.bucket.clone(),
                 key,
@@ -232,6 +378,67 @@ impl ObjectStore {
             .head_key(&key)
             .await?
             .ok_or(ObjectStoreError::Backend)?;
+        self.verify_key_hash(&key, expected_hash, size).await?;
+        Ok(PayloadInfo {
+            bucket: self.bucket.clone(),
+            key,
+            content_hash: expected_hash.to_owned(),
+            size,
+            media_type: media_type.unwrap_or_else(|| "application/json".to_owned()),
+        })
+    }
+
+    /// Writes a bootstrap manifest to its own immutable namespace.
+    ///
+    /// Bootstrap manifests contain metadata references only and are retained for a short
+    /// pagination window. They use the same raw-byte SHA-256 verification as snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns a hash mismatch before writing or a backend error without exposing object keys.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn put_bootstrap_manifest(
+        &self,
+        owner_user_id: Uuid,
+        project_id: Uuid,
+        manifest_id: Uuid,
+        expected_hash: &str,
+        bytes: Bytes,
+    ) -> Result<PayloadInfo, ObjectStoreError> {
+        let actual_hash = hex::encode(Sha256::digest(&bytes));
+        if actual_hash != expected_hash {
+            return Err(ObjectStoreError::HashMismatch);
+        }
+        let key = bootstrap_manifest_key(owner_user_id, project_id, manifest_id);
+        if let Some(existing) = self.head_key(&key).await? {
+            if existing.0 != u64::try_from(bytes.len()).map_err(|_| ObjectStoreError::Backend)? {
+                return Err(ObjectStoreError::Backend);
+            }
+            self.verify_key_hash(&key, expected_hash, existing.0)
+                .await?;
+            return Ok(PayloadInfo {
+                bucket: self.bucket.clone(),
+                key,
+                content_hash: expected_hash.to_owned(),
+                size: existing.0,
+                media_type: existing.1.unwrap_or_else(|| "application/json".to_owned()),
+            });
+        }
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .content_length(i64::try_from(bytes.len()).map_err(|_| ObjectStoreError::Backend)?)
+            .content_type("application/json")
+            .body(ByteStream::from(bytes))
+            .send()
+            .await
+            .map_err(|_| ObjectStoreError::Backend)?;
+        let (size, media_type) = self
+            .head_key(&key)
+            .await?
+            .ok_or(ObjectStoreError::Backend)?;
+        self.verify_key_hash(&key, expected_hash, size).await?;
         Ok(PayloadInfo {
             bucket: self.bucket.clone(),
             key,
@@ -273,11 +480,22 @@ impl ObjectStore {
         content_hash: &str,
         range: Option<&str>,
     ) -> Result<PayloadDownload, ObjectStoreError> {
-        let mut request = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(payload_key(owner_user_id, project_id, content_hash));
+        self.get_key_range(&payload_key(owner_user_id, project_id, content_hash), range)
+            .await
+    }
+
+    /// Streams an internal object key to the worker without exposing it through the API layer.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn get_key(&self, key: &str) -> Result<PayloadDownload, ObjectStoreError> {
+        self.get_key_range(key, None).await
+    }
+
+    async fn get_key_range(
+        &self,
+        key: &str,
+        range: Option<&str>,
+    ) -> Result<PayloadDownload, ObjectStoreError> {
+        let mut request = self.client.get_object().bucket(&self.bucket).key(key);
         if let Some(range) = range {
             request = request.range(range);
         }
@@ -330,7 +548,9 @@ impl ObjectStore {
                 let Some(key) = object.key() else {
                     continue;
                 };
-                let managed_object = key.contains("/uploads/");
+                let managed_object = key.contains("/uploads/")
+                    || key.contains("/snapshots/")
+                    || key.contains("/bootstrap/");
                 let old_enough = object
                     .last_modified()
                     .and_then(|modified| OffsetDateTime::from_unix_timestamp(modified.secs()).ok())
@@ -437,6 +657,36 @@ impl ObjectStore {
             Err(_) => Err(ObjectStoreError::Backend),
         }
     }
+
+    async fn verify_key_hash(
+        &self,
+        key: &str,
+        expected_hash: &str,
+        expected_size: u64,
+    ) -> Result<(), ObjectStoreError> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|_| ObjectStoreError::Backend)?;
+        let mut body = output.body;
+        let mut hasher = Sha256::new();
+        let mut size = 0_u64;
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(|_| ObjectStoreError::Backend)?;
+            size = size
+                .checked_add(u64::try_from(chunk.len()).map_err(|_| ObjectStoreError::Backend)?)
+                .ok_or(ObjectStoreError::Backend)?;
+            hasher.update(&chunk);
+        }
+        if size != expected_size || hex::encode(hasher.finalize()) != expected_hash {
+            return Err(ObjectStoreError::HashMismatch);
+        }
+        Ok(())
+    }
 }
 
 #[must_use]
@@ -470,6 +720,16 @@ pub fn parse_payload_key(key: &str) -> Option<(Uuid, Uuid, String)> {
 #[must_use]
 pub fn manifest_key(owner_user_id: Uuid, project_id: Uuid, snapshot_id: Uuid) -> String {
     format!("users/{owner_user_id}/projects/{project_id}/snapshots/{snapshot_id}/manifest.json")
+}
+
+#[must_use]
+pub fn bootstrap_manifest_key(owner_user_id: Uuid, project_id: Uuid, manifest_id: Uuid) -> String {
+    format!("users/{owner_user_id}/projects/{project_id}/bootstrap/{manifest_id}.json")
+}
+
+#[must_use]
+pub fn export_key(owner_user_id: Uuid, export_id: Uuid) -> String {
+    format!("users/{owner_user_id}/exports/{export_id}.tar.zst")
 }
 
 #[cfg(test)]

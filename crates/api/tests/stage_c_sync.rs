@@ -27,9 +27,19 @@ const TODO_ID: &str = "01J5MZ6K6AC2F4Y17D8Q1T8PXP";
 #[allow(clippy::too_many_lines)]
 async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
     let Ok(database_url) = std::env::var("TASKTIPS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TASKTIPS_DATABASE_URL is required for stage_c_sync in CI"
+        );
+        eprintln!("stage_c_sync skipped: TASKTIPS_DATABASE_URL is not set");
         return;
     };
     let Ok(endpoint) = std::env::var("RUSTFS_ENDPOINT") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "RUSTFS_ENDPOINT is required for stage_c_sync in CI"
+        );
+        eprintln!("stage_c_sync skipped: RUSTFS_ENDPOINT is not set");
         return;
     };
     let persistence = Persistence::connect(&database_url)
@@ -202,6 +212,55 @@ async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
     );
     assert_eq!(changes.last().unwrap()["type"], "tombstone");
 
+    let second_id = "01J5MZ6K6AC2F4Y17D8Q1T8PXY";
+    let second_payload = b"second-head";
+    let second_hash = upload_payload(&app, project.id, &device_one, second_payload).await;
+    let (status, second_push) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{}/sync/push", project.id),
+        &device_one.access_token,
+        object_push_body_for_id(
+            &device_one,
+            second_id,
+            "second-head-request",
+            1,
+            None,
+            1,
+            &second_hash,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "second head push failed: {second_push}"
+    );
+    let (status, first_bootstrap_page) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{}/sync/bootstrap", project.id),
+        &device_one.access_token,
+        json!({"limit": 1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(first_bootstrap_page["hasMore"].as_bool().unwrap());
+    let next_page_token = first_bootstrap_page["nextPageToken"]
+        .as_str()
+        .expect("manifest page token should be returned");
+    let (status, second_bootstrap_page) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{}/sync/bootstrap", project.id),
+        &device_one.access_token,
+        json!({"limit": 1, "pageToken": next_page_token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!second_bootstrap_page["hasMore"].as_bool().unwrap());
+    assert!(second_bootstrap_page["cursor"].as_str().is_some());
+
     let (status, snapshot) = json_request(
         &app,
         "POST",
@@ -224,6 +283,20 @@ async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let restore_id = Uuid::parse_str(restore["id"].as_str().unwrap()).unwrap();
+    assert!(matches!(
+        persistence
+            .enqueue_restore(
+                user_one.user_id,
+                "user",
+                project.id,
+                None,
+                Some(4),
+                "reject concurrent restore",
+                "stage-c-concurrent-restore",
+            )
+            .await,
+        Err(tasktips_persistence::PersistenceError::Conflict)
+    ));
     let claimed = persistence
         .claim_restore_job()
         .await
@@ -260,6 +333,51 @@ async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
     assert_eq!(restored.status, "succeeded");
     assert_eq!(restored.generation_after, Some(2));
 
+    let failed_restore = persistence
+        .enqueue_restore(
+            user_one.user_id,
+            "user",
+            project.id,
+            None,
+            Some(4),
+            "exercise failed restore reopen",
+            "stage-c-failed-restore",
+        )
+        .await
+        .expect("second restore should queue");
+    let failed_claim = persistence
+        .claim_restore_job()
+        .await
+        .expect("failed restore should be claimable")
+        .expect("failed restore should be queued");
+    assert_eq!(failed_claim.id, failed_restore.id);
+    let failed_lease = failed_claim
+        .lease_token
+        .expect("failed restore should have a lease");
+    persistence
+        .fail_restore_job_with_lease(failed_claim.id, failed_lease, "TEST_FAILURE")
+        .await
+        .expect("restore failure should be recorded");
+    assert!(matches!(
+        persistence
+            .validate_sync_project(user_one.user_id, "user", project.id)
+            .await,
+        Err(tasktips_persistence::PersistenceError::ProjectMaintenance)
+    ));
+    persistence
+        .reopen_failed_restore(
+            admin.id,
+            project.id,
+            "operator verified database and object references",
+            "stage-c-reopen",
+        )
+        .await
+        .expect("verified failed restore should reopen");
+    persistence
+        .validate_sync_project(user_one.user_id, "user", project.id)
+        .await
+        .expect("reopened project should accept sync");
+
     let (status, history) = json_request(
         &app,
         "GET",
@@ -269,7 +387,7 @@ async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(history["items"].as_array().unwrap().len(), 4);
+    assert_eq!(history["items"].as_array().unwrap().len(), 6);
     assert_generation_mismatch(&app, project.id, &device_one, &first_hash).await;
 
     let (status, error) = json_request(
@@ -282,6 +400,54 @@ async fn stage_c_two_device_sync_is_cas_idempotent_and_isolated() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["code"], "CURSOR_INVALID");
+
+    let (status, error) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{}/purge", project.id),
+        &device_one.access_token,
+        json!({"password": "wrong-password", "reason": "test purge"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error["code"], "AUTHENTICATION_REQUIRED");
+    let (status, purge) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{}/purge", project.id),
+        &device_one.access_token,
+        json!({"password": "user-password-123", "reason": "test purge"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "purge should queue: {purge}");
+    let purge_id = Uuid::parse_str(purge["id"].as_str().unwrap()).unwrap();
+    let purge_job = persistence
+        .claim_project_purge_job()
+        .await
+        .expect("purge should be claimable")
+        .expect("purge should be queued");
+    assert_eq!(purge_job.id, purge_id);
+    let purge_lease = purge_job.lease_token.expect("purge should have a lease");
+    let purge_keys = persistence
+        .prepare_project_purge(purge_id, purge_lease)
+        .await
+        .expect("purge should detach database references");
+    for key in purge_keys {
+        worker_store
+            .delete_key(&key)
+            .await
+            .expect("purge object should be deleted");
+    }
+    persistence
+        .complete_project_purge(purge_id, purge_lease)
+        .await
+        .expect("purge should complete");
+    assert!(matches!(
+        persistence
+            .get_project(user_one.user_id, "user", project.id)
+            .await,
+        Err(tasktips_persistence::PersistenceError::NotFound)
+    ));
 }
 
 async fn assert_payload_access(
@@ -484,12 +650,32 @@ fn object_push_body(
     revision: i64,
     hash: &str,
 ) -> Value {
+    object_push_body_for_id(
+        device,
+        TODO_ID,
+        request_id,
+        generation,
+        base_revision,
+        revision,
+        hash,
+    )
+}
+
+fn object_push_body_for_id(
+    device: &DeviceToken,
+    id: &str,
+    request_id: &str,
+    generation: i64,
+    base_revision: Option<i64>,
+    revision: i64,
+    hash: &str,
+) -> Value {
     json!({
         "requestId": request_id,
         "generation": generation,
         "objects": [{
             "kind": "todo",
-            "id": TODO_ID,
+            "id": id,
             "schemaVersion": 1,
             "revision": revision,
             "baseRevision": base_revision,

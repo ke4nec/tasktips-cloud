@@ -7,6 +7,11 @@ use uuid::Uuid;
 #[tokio::test]
 async fn rls_and_auth_state_isolate_two_users() {
     let Ok(database_url) = std::env::var("TASKTIPS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TASKTIPS_DATABASE_URL is required for identity_rls in CI"
+        );
+        eprintln!("identity_rls skipped: TASKTIPS_DATABASE_URL is not set");
         return;
     };
     let persistence = Persistence::connect(&database_url)
@@ -34,6 +39,399 @@ async fn rls_and_auth_state_isolate_two_users() {
     assert_admin_boundary(&persistence, admin.id, &user_one, &user_two, project_two_id).await;
     assert_refresh_reuse_revokes_family(&persistence, &user_one, test_id).await;
     assert_device_revocation(&persistence, &user_two).await;
+}
+
+#[tokio::test]
+async fn malformed_request_identity_fails_closed_under_rls() {
+    let Ok(database_url) = std::env::var("TASKTIPS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TASKTIPS_DATABASE_URL is required for identity_rls in CI"
+        );
+        eprintln!("identity_rls skipped: TASKTIPS_DATABASE_URL is not set");
+        return;
+    };
+    let persistence = Persistence::connect(&database_url)
+        .await
+        .expect("test database should be reachable");
+    persistence
+        .migrate()
+        .await
+        .expect("migrations should apply");
+    let mut connection = persistence
+        .pool()
+        .acquire()
+        .await
+        .expect("database connection should be available");
+    sqlx::query("BEGIN")
+        .execute(&mut *connection)
+        .await
+        .expect("transaction should begin");
+    sqlx::query("SET LOCAL ROLE tasktips_app")
+        .execute(&mut *connection)
+        .await
+        .expect("application role should be available");
+    sqlx::query("SELECT set_config('app.user_id', 'not-a-uuid', true)")
+        .execute(&mut *connection)
+        .await
+        .expect("request identity should be set");
+    let visible: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projects")
+        .fetch_one(&mut *connection)
+        .await
+        .expect("malformed identity must not abort the query");
+    assert_eq!(visible, 0);
+    sqlx::query("ROLLBACK")
+        .execute(&mut *connection)
+        .await
+        .expect("transaction should roll back");
+}
+
+#[tokio::test]
+async fn distributed_rate_limit_is_shared_and_windowed() {
+    let Ok(database_url) = std::env::var("TASKTIPS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TASKTIPS_DATABASE_URL is required for distributed rate-limit test in CI"
+        );
+        eprintln!("distributed rate-limit test skipped: TASKTIPS_DATABASE_URL is not set");
+        return;
+    };
+    let persistence = Persistence::connect(&database_url)
+        .await
+        .expect("test database should be reachable");
+    persistence
+        .migrate()
+        .await
+        .expect("migrations should apply");
+    let bucket = format!("rate-limit-test-{}", Uuid::new_v4());
+    assert!(
+        persistence
+            .consume_distributed_rate_limit(&bucket, 2, time::Duration::seconds(60))
+            .await
+            .expect("first token should be accepted")
+    );
+    assert!(
+        persistence
+            .consume_distributed_rate_limit(&bucket, 2, time::Duration::seconds(60))
+            .await
+            .expect("second token should be accepted")
+    );
+    assert!(
+        !persistence
+            .consume_distributed_rate_limit(&bucket, 2, time::Duration::seconds(60))
+            .await
+            .expect("third token should be rejected")
+    );
+}
+
+#[tokio::test]
+async fn reauth_nonce_is_shared_and_one_use() {
+    let Ok(database_url) = std::env::var("TASKTIPS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TASKTIPS_DATABASE_URL is required for re-auth nonce test in CI"
+        );
+        eprintln!("reauth nonce test skipped: TASKTIPS_DATABASE_URL is not set");
+        return;
+    };
+    let persistence = Persistence::connect(&database_url)
+        .await
+        .expect("test database should be reachable");
+    persistence
+        .migrate()
+        .await
+        .expect("migrations should apply");
+
+    let test_id = Uuid::new_v4();
+    let admin = persistence
+        .create_initial_admin(
+            &format!("reauth-admin-{test_id}@example.test"),
+            &format!("reauth-admin-{test_id}@example.test"),
+            "test-password-hash",
+        )
+        .await
+        .expect("admin should be created");
+    let device_id = Uuid::new_v4();
+    persistence
+        .create_login_session(
+            admin.id,
+            device_id,
+            &NewRefreshToken {
+                token_hash: token_hash(test_id, 41),
+                family_id: Uuid::new_v4(),
+                expires_at: refresh_expiry(3_600),
+            },
+            "reauth-session-test",
+        )
+        .await
+        .expect("admin device should be registered");
+
+    let nonce_hash = vec![41_u8; 32];
+    persistence
+        .create_reauth_nonce(
+            admin.id,
+            device_id,
+            &nonce_hash,
+            time::OffsetDateTime::now_utc() + time::Duration::minutes(5),
+        )
+        .await
+        .expect("nonce should be persisted");
+    let second_connection = Persistence::connect(&database_url)
+        .await
+        .expect("second database connection should be reachable");
+    assert!(
+        second_connection
+            .consume_reauth_nonce(admin.id, device_id, &nonce_hash)
+            .await
+            .expect("nonce consumption should succeed")
+    );
+    assert!(
+        !second_connection
+            .consume_reauth_nonce(admin.id, device_id, &nonce_hash)
+            .await
+            .expect("reusing a nonce should be rejected")
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn account_purge_requires_export_and_finishes_as_deleted() {
+    let Ok(database_url) = std::env::var("TASKTIPS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TASKTIPS_DATABASE_URL is required for account purge integration test in CI"
+        );
+        eprintln!("account purge integration test skipped: TASKTIPS_DATABASE_URL is not set");
+        return;
+    };
+    let persistence = Persistence::connect(&database_url)
+        .await
+        .expect("test database should be reachable");
+    persistence
+        .migrate()
+        .await
+        .expect("migrations should apply");
+    let test_id = Uuid::new_v4();
+    let admin = persistence
+        .create_initial_admin(
+            &format!("purge-admin-{test_id}@example.test"),
+            &format!("purge-admin-{test_id}@example.test"),
+            "test-password-hash",
+        )
+        .await
+        .expect("admin should be created");
+    let user = activate_user(&persistence, admin.id, test_id, 7).await;
+
+    let first = persistence
+        .request_account_purge_export(admin.id, user.user_id, "test export", "purge-test")
+        .await
+        .expect("first phase should queue an export");
+    assert!(first.confirmation_required);
+    assert_eq!(first.status, "queued");
+    sqlx::query(
+        "UPDATE jobs SET run_after = CURRENT_TIMESTAMP + INTERVAL '1 hour', \
+             lease_expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour' \
+         WHERE kind = 'account_purge' AND status IN ('queued', 'running') AND id <> $1",
+    )
+    .bind(first.job_id)
+    .execute(persistence.pool())
+    .await
+    .expect("unrelated account purge jobs should not race the focused test");
+    let export_job = persistence
+        .claim_account_purge_job()
+        .await
+        .expect("export job should be claimable")
+        .expect("export job should exist");
+    let export_lease = export_job
+        .lease_token
+        .expect("export lease should be present");
+    let export = persistence
+        .prepare_account_export(export_job.id, export_lease)
+        .await
+        .expect("export should read account metadata");
+    assert_eq!(export.owner_user_id, user.user_id);
+    persistence
+        .complete_account_export(
+            export_job.id,
+            export_lease,
+            export.export_id,
+            &"a".repeat(64),
+            1,
+        )
+        .await
+        .expect("export should become ready");
+
+    let confirmed = persistence
+        .confirm_account_purge(
+            admin.id,
+            user.user_id,
+            first.export_id,
+            "test confirm",
+            "purge-confirm-test",
+        )
+        .await
+        .expect("ready export should allow confirmation");
+    assert!(!confirmed.confirmation_required);
+    sqlx::query(
+        "UPDATE jobs SET run_after = CURRENT_TIMESTAMP + INTERVAL '1 hour', \
+             lease_expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour' \
+         WHERE kind = 'account_purge' AND status IN ('queued', 'running') AND id <> $1",
+    )
+    .bind(confirmed.job_id)
+    .execute(persistence.pool())
+    .await
+    .expect("unrelated account purge jobs should not race the focused test");
+    let purge_job = persistence
+        .claim_account_purge_job()
+        .await
+        .expect("purge job should be claimable")
+        .expect("purge job should exist");
+    let purge_lease = purge_job
+        .lease_token
+        .expect("purge lease should be present");
+    let keys = persistence
+        .prepare_account_purge(purge_job.id, purge_lease)
+        .await
+        .expect("account rows should be detached");
+    assert!(
+        keys.iter()
+            .any(|key| key.contains(&first.export_id.to_string()))
+    );
+    persistence
+        .complete_account_purge(purge_job.id, purge_lease)
+        .await
+        .expect("account should become deleted");
+    let users = persistence
+        .admin_list_users(admin.id)
+        .await
+        .expect("admin metadata should remain available");
+    let deleted = users
+        .into_iter()
+        .find(|record| record.id == user.user_id)
+        .expect("deleted user should retain an audit reference");
+    assert_eq!(deleted.status, "deleted");
+    assert_eq!(deleted.email, "deleted");
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn restore_cancellation_fences_queued_and_running_jobs() {
+    let Ok(database_url) = std::env::var("TASKTIPS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TASKTIPS_DATABASE_URL is required for restore cancellation integration test in CI"
+        );
+        eprintln!(
+            "restore cancellation integration test skipped: TASKTIPS_DATABASE_URL is not set"
+        );
+        return;
+    };
+    let persistence = Persistence::connect(&database_url)
+        .await
+        .expect("test database should be reachable");
+    persistence
+        .migrate()
+        .await
+        .expect("migrations should apply");
+    let test_id = Uuid::new_v4();
+    let admin = persistence
+        .create_initial_admin(
+            &format!("restore-admin-{test_id}@example.test"),
+            &format!("restore-admin-{test_id}@example.test"),
+            "test-password-hash",
+        )
+        .await
+        .expect("admin should be created");
+    let user = activate_user(&persistence, admin.id, test_id, 8).await;
+    let project = persistence
+        .create_project(user.user_id, "user", "Restore cancellation")
+        .await
+        .expect("project should be created");
+
+    let queued = persistence
+        .enqueue_restore(
+            user.user_id,
+            "user",
+            project.id,
+            None,
+            Some(0),
+            "queued cancellation",
+            "restore-cancel-queued",
+        )
+        .await
+        .expect("restore should be queued");
+    let cancelled = persistence
+        .cancel_restore(
+            user.user_id,
+            "user",
+            project.id,
+            queued.id,
+            "no longer needed",
+            "restore-cancel-request",
+        )
+        .await
+        .expect("queued restore should cancel");
+    assert_eq!(cancelled.status, "cancelled");
+    assert!(!cancelled.cancel_requested);
+
+    let running = persistence
+        .enqueue_restore(
+            user.user_id,
+            "user",
+            project.id,
+            None,
+            Some(0),
+            "running cancellation",
+            "restore-cancel-running",
+        )
+        .await
+        .expect("second restore should be queued");
+    sqlx::query(
+        "UPDATE restore_jobs \
+         SET run_after = CURRENT_TIMESTAMP + INTERVAL '1 hour', \
+             lease_expires_at = CURRENT_TIMESTAMP + INTERVAL '1 hour' \
+         WHERE id <> $1 AND status IN ('queued', 'running')",
+    )
+    .bind(running.id)
+    .execute(persistence.pool())
+    .await
+    .expect("unrelated restore jobs should not race the focused test");
+    let claimed = persistence
+        .claim_restore_job()
+        .await
+        .expect("restore should be claimable")
+        .expect("running restore should exist");
+    assert_eq!(claimed.id, running.id);
+    let lease = claimed
+        .lease_token
+        .expect("restore lease should be present");
+    let requested = persistence
+        .cancel_restore(
+            user.user_id,
+            "user",
+            project.id,
+            running.id,
+            "stop restore",
+            "restore-cancel-running-request",
+        )
+        .await
+        .expect("running restore should accept cancellation");
+    assert_eq!(requested.status, "running");
+    assert!(requested.cancel_requested);
+    persistence
+        .cancel_restore_with_lease(running.id, lease)
+        .await
+        .expect("worker should finalize cancellation");
+    let final_job = persistence
+        .get_restore_job(user.user_id, "user", project.id, running.id)
+        .await
+        .expect("cancelled restore should remain queryable");
+    assert_eq!(final_job.status, "cancelled");
+    let project = persistence
+        .get_project(user.user_id, "user", project.id)
+        .await
+        .expect("project should reopen after cancellation");
+    assert_eq!(project.status, "active");
 }
 
 async fn assert_project_isolation(

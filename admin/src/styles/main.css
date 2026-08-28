@@ -153,6 +153,24 @@ body {
   width: 100%;
 }
 
+.trend-table {
+  margin-top: 24px;
+}
+
+.trend-table h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.page-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 16px;
+}
+
 .restore-form {
   padding: 14px 16px 2px;
   margin-bottom: 16px;

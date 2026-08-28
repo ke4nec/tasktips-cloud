@@ -17,6 +17,11 @@ use uuid::Uuid;
 #[tokio::test]
 async fn stage_b_http_workflow_enforces_isolation_and_rotation() {
     let Ok(database_url) = std::env::var("TASKTIPS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TASKTIPS_DATABASE_URL is required for stage_b_api in CI"
+        );
+        eprintln!("stage_b_api skipped: TASKTIPS_DATABASE_URL is not set");
         return;
     };
     let persistence = Persistence::connect(&database_url)
@@ -27,11 +32,14 @@ async fn stage_b_http_workflow_enforces_isolation_and_rotation() {
         .await
         .expect("migrations should apply");
     let auth = test_auth();
-    let app = build_application_router(AppState::new(
-        Readiness::unavailable(),
-        Some(persistence.clone()),
-        Some(auth),
-    ));
+    let app = build_application_router(
+        AppState::new(
+            Readiness::unavailable(),
+            Some(persistence.clone()),
+            Some(auth),
+        )
+        .with_admin_origin("https://admin.example.test"),
+    );
 
     let test_id = Uuid::new_v4();
     let admin_email = format!("api-admin-{test_id}@example.test");
@@ -43,7 +51,7 @@ async fn stage_b_http_workflow_enforces_isolation_and_rotation() {
         )
         .await
         .expect("admin should be created");
-    let admin = login(&app, &admin_email, "admin-password-123", Uuid::new_v4()).await;
+    let admin = admin_login(&app, &admin_email, "admin-password-123", Uuid::new_v4()).await;
     assert_admin_refresh_cookie(&app, &admin_email).await;
     let user_one = invite_and_activate(&app, &admin.access_token, test_id, 1).await;
     let user_two = invite_and_activate(&app, &admin.access_token, test_id, 2).await;
@@ -54,6 +62,7 @@ async fn stage_b_http_workflow_enforces_isolation_and_rotation() {
     assert_refresh_http_reuse(&app, &user_one).await;
     assert_logout_http_revokes_device_tokens(&app, &user_two).await;
     assert_device_http_revocation(&app, &user_two).await;
+    assert_account_purge_requires_reauth(&app, &admin, &user_one).await;
     assert_account_disable(&app, &admin, &user_one).await;
 }
 
@@ -170,6 +179,7 @@ async fn assert_device_http_isolation(app: &Router, user_one: &Tokens, user_two:
     assert_eq!(error["code"], "NOT_FOUND");
 }
 
+#[allow(clippy::too_many_lines)]
 async fn assert_admin_http_boundary(
     app: &Router,
     admin: &Tokens,
@@ -181,6 +191,15 @@ async fn assert_admin_http_boundary(
         "GET",
         "/api/v1/admin/users",
         Some(&user_one.access_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = json_request(
+        app,
+        "GET",
+        "/api/v1/projects",
+        Some(&admin.access_token),
         None,
     )
     .await;
@@ -253,9 +272,10 @@ async fn assert_admin_http_boundary(
     assert!(overview.get("payloadBytes").is_some());
     assert!(!overview.to_string().contains("objectKey"));
     for path in [
-        "/api/v1/admin/sync-attempts",
-        "/api/v1/admin/audit-events",
-        "/api/v1/admin/restores",
+        "/api/v1/admin/sync-attempts?limit=1&offset=0",
+        "/api/v1/admin/audit-events?limit=1&offset=0",
+        "/api/v1/admin/restores?limit=1&offset=0",
+        "/api/v1/admin/jobs?limit=1&offset=0",
     ] {
         let (status, metadata) =
             json_request(app, "GET", path, Some(&admin.access_token), None).await;
@@ -265,6 +285,17 @@ async fn assert_admin_http_boundary(
         assert!(!serialized.contains("objectKey"));
         assert!(!serialized.contains("downloadUrl"));
     }
+    let (status, trends) = json_request(
+        app,
+        "GET",
+        "/api/v1/admin/metrics/trends?days=30",
+        Some(&admin.access_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(trends["days"], 30);
+    assert!(!trends.to_string().contains("contentHash"));
 }
 
 async fn assert_refresh_http_reuse(app: &Router, user_one: &Tokens) {
@@ -387,6 +418,49 @@ async fn assert_account_disable(app: &Router, admin: &Tokens, user_one: &Tokens)
     assert_eq!(disabled["code"], "ACCOUNT_DISABLED");
 }
 
+async fn assert_account_purge_requires_reauth(app: &Router, admin: &Tokens, user: &Tokens) {
+    let (status, reauth) = json_request(
+        app,
+        "POST",
+        "/api/v1/admin/auth/re-auth",
+        Some(&admin.access_token),
+        Some(json!({"password": "admin-password-123"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let nonce = reauth["nonce"]
+        .as_str()
+        .expect("re-auth nonce should exist");
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/admin/users/{}/purge", user.user_id))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", admin.access_token),
+        )
+        .header(header::ORIGIN, "https://admin.example.test")
+        .header("sec-fetch-site", "same-origin")
+        .header("x-reauth-nonce", nonce)
+        .body(Body::from(
+            json!({"confirmed": false, "reason": "stage B purge export"}).to_string(),
+        ))
+        .expect("account purge request should build");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("account purge should respond");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .expect("account purge body should collect");
+    let body: Value = serde_json::from_slice(&bytes).expect("account purge should return JSON");
+    assert_eq!(body["confirmationRequired"], true);
+    assert!(body["exportId"].as_str().is_some());
+    assert!(body.get("objectKey").is_none());
+}
+
 struct Tokens {
     access_token: String,
     refresh_token: String,
@@ -394,17 +468,44 @@ struct Tokens {
     user_id: Uuid,
 }
 
-async fn login(app: &Router, email: &str, password: &str, device_id: Uuid) -> Tokens {
-    let (status, body) = json_request(
-        app,
-        "POST",
-        "/api/v1/auth/login",
-        None,
-        Some(json!({"email": email, "password": password, "deviceId": device_id})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "login response: {body}");
-    tokens_from_body(app, &body, device_id).await
+async fn admin_login(app: &Router, email: &str, password: &str, device_id: Uuid) -> Tokens {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/admin/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, "https://admin.example.test")
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::from(
+            json!({"email": email, "password": password, "deviceId": device_id}).to_string(),
+        ))
+        .expect("admin login request should build");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("admin login should respond");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .expect("admin login body should collect");
+    let body: Value = serde_json::from_slice(&bytes).expect("admin login should return JSON");
+    let access_token = body["accessToken"].as_str().unwrap().to_owned();
+    let (status, users) =
+        json_request(app, "GET", "/api/v1/admin/users", Some(&access_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let user_id = users["items"]
+        .as_array()
+        .and_then(|items| items.iter().find(|user| user["email"] == email))
+        .and_then(|user| user["id"].as_str())
+        .expect("admin user should be visible")
+        .parse()
+        .expect("admin user id should be a UUID");
+    Tokens {
+        access_token,
+        refresh_token: String::new(),
+        device_id,
+        user_id,
+    }
 }
 
 async fn invite_and_activate(
@@ -457,8 +558,10 @@ async fn assert_admin_refresh_cookie(app: &Router, email: &str) {
     let device_id = Uuid::new_v4();
     let request = Request::builder()
         .method("POST")
-        .uri("/api/v1/auth/login")
+        .uri("/api/v1/admin/auth/login")
         .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, "https://admin.example.test")
+        .header("sec-fetch-site", "same-origin")
         .body(Body::from(
             json!({
                 "email": email,
@@ -479,6 +582,7 @@ async fn assert_admin_refresh_cookie(app: &Router, email: &str) {
         .get(header::SET_COOKIE)
         .and_then(|value| value.to_str().ok())
         .expect("admin login should set refresh cookie");
+    assert!(set_cookie.starts_with("tasktips_admin_refresh="));
     assert!(set_cookie.contains("HttpOnly"));
     assert!(set_cookie.contains("Secure"));
     assert!(set_cookie.contains("SameSite=Strict"));
@@ -489,7 +593,9 @@ async fn assert_admin_refresh_cookie(app: &Router, email: &str) {
 
     let request = Request::builder()
         .method("POST")
-        .uri("/api/v1/auth/refresh")
+        .uri("/api/v1/admin/auth/refresh")
+        .header(header::ORIGIN, "https://admin.example.test")
+        .header("sec-fetch-site", "same-origin")
         .header(header::COOKIE, cookie)
         .body(Body::empty())
         .expect("cookie refresh request should build");
@@ -515,6 +621,11 @@ async fn json_request(
     body: Option<Value>,
 ) -> (StatusCode, Value) {
     let mut request = Request::builder().method(method).uri(path);
+    if path.starts_with("/api/v1/admin/") {
+        request = request
+            .header(header::ORIGIN, "https://admin.example.test")
+            .header("sec-fetch-site", "same-origin");
+    }
     if let Some(access_token) = access_token {
         request = request.header(header::AUTHORIZATION, format!("Bearer {access_token}"));
     }

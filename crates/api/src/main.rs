@@ -1,8 +1,8 @@
-use std::{env, fs, net::SocketAddr};
+use std::{env, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use tasktips_api::{
     AppState, Readiness,
-    auth::{AuthService, hash_password},
+    auth::{AuthService, calibrate_password_hash, hash_password},
     build_application_router,
     cursor::CursorSigner,
 };
@@ -32,6 +32,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .first()
         .is_some_and(|argument| argument == "admin")
     {
+        if arguments
+            .get(1)
+            .is_some_and(|argument| argument == "calibrate-password")
+        {
+            return calibrate_password();
+        }
         return create_admin(&arguments).await;
     }
 
@@ -46,18 +52,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .map(|_| build_auth_service())
         .transpose()?;
+    let admin_origin = auth
+        .as_ref()
+        .map(|_| env::var("TASKTIPS_ADMIN_ORIGIN"))
+        .transpose()?;
     let object_store = build_object_store();
     let readiness = Readiness::new(database.clone(), object_store.clone());
     let mut state = AppState::new(readiness, database, auth);
+    if let Some(admin_origin) = admin_origin {
+        state = state.with_admin_origin(admin_origin);
+    }
     if let Some(object_store) = object_store {
         let cursor_secret = env::var("TASKTIPS_CURSOR_SIGNING_SECRET")?;
         state = state.with_sync(object_store, CursorSigner::new(cursor_secret)?);
     }
+    cleanup_upload_temp_dir().await;
     let listener = TcpListener::bind(address).await?;
     info!(%address, "tasktips API listening");
 
     axum::serve(listener, build_application_router(state)).await?;
     Ok(())
+}
+
+fn calibrate_password() -> Result<(), Box<dyn std::error::Error>> {
+    for result in calibrate_password_hash()? {
+        println!(
+            "TASKTIPS_ARGON2_MEMORY_KIB={} TASKTIPS_ARGON2_TIME_COST={} TASKTIPS_ARGON2_PARALLELISM={} elapsed_ms={}",
+            result.config.memory_kib,
+            result.config.time_cost,
+            result.config.parallelism,
+            result.elapsed_ms,
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
+async fn cleanup_upload_temp_dir() {
+    let directory = match env::var_os("TASKTIPS_UPLOAD_TEMP_DIR") {
+        Some(path) => PathBuf::from(path),
+        None => env::temp_dir(),
+    };
+    let Ok(mut entries) = tokio::fs::read_dir(&directory).await else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(Duration::from_hours(1))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("tasktips-payload-") && name.ends_with(".tmp"))
+        {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        if metadata
+            .modified()
+            .ok()
+            .is_some_and(|modified| modified < cutoff)
+            && let Err(error) = tokio::fs::remove_file(path).await
+        {
+            tracing::warn!(%error, "stale upload temporary file cleanup failed");
+        }
+    }
 }
 
 async fn create_admin(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {

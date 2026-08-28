@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { apiClient } from '@/api/client';
@@ -17,6 +17,11 @@ const restoreSequence = ref<number | undefined>();
 const restoreReason = ref('');
 const restoreLoading = ref(false);
 const restoreMessage = ref('');
+const pageOffset = ref(0);
+const hasMore = ref(false);
+const pageSize = 100;
+const trendRows = ref<Row[]>([]);
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
 const projectRows = computed(() =>
   props.section === 'projects' ? rows.value : [],
@@ -59,6 +64,9 @@ const columns: Record<Section, string[]> = {
   sync: [
     'operation',
     'status',
+    'attempts',
+    'runAfter',
+    'cancelRequested',
     'projectId',
     'deviceId',
     'itemCount',
@@ -75,31 +83,53 @@ const columns: Record<Section, string[]> = {
   ],
 };
 
-async function load(): Promise<void> {
+async function load(reset = false): Promise<void> {
+  if (reset) pageOffset.value = 0;
   loading.value = true;
   error.value = undefined;
+  trendRows.value = [];
   try {
+    const page = { limit: pageSize, offset: pageOffset.value };
     if (props.section === 'users') {
-      rows.value = (await apiClient.getAdminUsers()).items as Row[];
+      const response = await apiClient.getAdminUsers(page);
+      rows.value = response.items as Row[];
+      hasMore.value = Boolean(response.hasMore);
     } else if (props.section === 'sync') {
-      rows.value = (await apiClient.getAdminSyncAttempts()).items as Row[];
-      const restores = (await apiClient.getAdminRestoreJobs()).items as Row[];
+      const [attempts, restoreJobs, jobs] = await Promise.all([
+        apiClient.getAdminSyncAttempts(page),
+        apiClient.getAdminRestoreJobs(page),
+        apiClient.getAdminJobs(page),
+      ]);
+      rows.value = attempts.items as Row[];
+      const restores = restoreJobs.items as Row[];
       rows.value = [
         ...rows.value,
         ...restores.map((job) => ({ ...job, operation: 'restore' })),
+        ...(jobs.items as Row[]).map((job) => ({
+          ...job,
+          operation: job.kind,
+        })),
       ];
+      hasMore.value = Boolean(
+        attempts.hasMore || restoreJobs.hasMore || jobs.hasMore,
+      );
+      const trends = await apiClient.getAdminTrends();
+      trendRows.value = trends.items as Row[];
     } else if (props.section === 'audit') {
-      rows.value = (await apiClient.getAdminAuditEvents()).items as Row[];
+      const response = await apiClient.getAdminAuditEvents(page);
+      rows.value = response.items as Row[];
+      hasMore.value = Boolean(response.hasMore);
     } else {
-      const users = (await apiClient.getAdminUsers()).items;
+      const users = (await apiClient.getAdminUsers(page)).items;
       const lists = await Promise.all(
         users.map((user) =>
           props.section === 'projects'
-            ? apiClient.getAdminProjects(user.id)
-            : apiClient.getAdminDevices(user.id),
+            ? apiClient.getAdminProjects(user.id, page)
+            : apiClient.getAdminDevices(user.id, page),
         ),
       );
       rows.value = lists.flatMap((list) => list.items as unknown as Row[]);
+      hasMore.value = Boolean(lists.some((list) => list.hasMore));
     }
     if (
       !projectRows.value.some(
@@ -113,6 +143,27 @@ async function load(): Promise<void> {
       reason instanceof Error ? reason.message : t('page.loadFailed');
   } finally {
     loading.value = false;
+  }
+}
+
+function nextPage(): void {
+  if (!hasMore.value) return;
+  pageOffset.value += pageSize;
+  void load();
+}
+
+function previousPage(): void {
+  pageOffset.value = Math.max(0, pageOffset.value - pageSize);
+  void load();
+}
+
+function updatePolling(): void {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = undefined;
+  if (props.section === 'sync') {
+    refreshTimer = setInterval(() => {
+      if (!loading.value) void load();
+    }, 15_000);
   }
 }
 
@@ -151,8 +202,20 @@ function display(value: unknown): string {
   return String(value);
 }
 
-watch(() => props.section, load);
-onMounted(load);
+watch(
+  () => props.section,
+  () => {
+    updatePolling();
+    void load(true);
+  },
+);
+onMounted(() => {
+  updatePolling();
+  void load(true);
+});
+onBeforeUnmount(() => {
+  if (refreshTimer) clearInterval(refreshTimer);
+});
 </script>
 
 <template>
@@ -162,7 +225,7 @@ onMounted(load);
         <h1>{{ t(titles[props.section]) }}</h1>
         <p>{{ t(descriptions[props.section]) }}</p>
       </div>
-      <el-button :loading="loading" @click="load">{{
+      <el-button :loading="loading" @click="load(true)">{{
         t('actions.refresh')
       }}</el-button>
     </header>
@@ -225,5 +288,50 @@ onMounted(load);
       </el-table-column>
       <template #empty><el-empty :description="t('page.noData')" /></template>
     </el-table>
+    <div
+      v-if="props.section === 'sync' && trendRows.length"
+      class="trend-table"
+    >
+      <h2>{{ t('trend.title') }}</h2>
+      <el-table :data="trendRows" stripe class="data-table" empty-text="">
+        <el-table-column prop="day" :label="t('trend.day')" min-width="160" />
+        <el-table-column
+          prop="attempts"
+          :label="t('trend.attempts')"
+          min-width="120"
+        />
+        <el-table-column
+          prop="succeeded"
+          :label="t('trend.succeeded')"
+          min-width="120"
+        />
+        <el-table-column
+          prop="conflicts"
+          :label="t('trend.conflicts')"
+          min-width="120"
+        />
+        <el-table-column
+          prop="p50LatencyMs"
+          :label="t('trend.p50')"
+          min-width="120"
+        />
+        <el-table-column
+          prop="p99LatencyMs"
+          :label="t('trend.p99')"
+          min-width="120"
+        />
+      </el-table>
+    </div>
+    <div v-if="!loading && (rows.length || hasMore)" class="page-controls">
+      <el-button :disabled="pageOffset === 0" @click="previousPage">
+        {{ t('pagination.previous') }}
+      </el-button>
+      <span>{{
+        t('pagination.page', { page: pageOffset / pageSize + 1 })
+      }}</span>
+      <el-button :disabled="!hasMore" @click="nextPage">
+        {{ t('pagination.next') }}
+      </el-button>
+    </div>
   </section>
 </template>

@@ -21,6 +21,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/openapi.yaml': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Download the OpenAPI document */
+    get: operations['getApiV1OpenApiDocument'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/health/live': {
     parameters: {
       query?: never;
@@ -117,6 +134,74 @@ export interface paths {
     put?: never;
     /** Revoke all refresh tokens for the authenticated device */
     post: operations['logout'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/auth/login': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Authenticate a system administrator */
+    post: operations['adminLogin'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/auth/refresh': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Rotate the administrator refresh cookie */
+    post: operations['adminRefreshToken'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/auth/logout': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Revoke the administrator device session */
+    post: operations['adminLogout'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/auth/re-auth': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Re-authenticate an administrator for a sensitive operation */
+    post: operations['adminReauthenticate'];
     delete?: never;
     options?: never;
     head?: never;
@@ -225,6 +310,25 @@ export interface paths {
     put?: never;
     /** Disable an owned project without deleting history */
     post: operations['disableProject'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/projects/{projectId}/purge': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify the owner password and queue irreversible project deletion */
+    post: operations['purgeProject'];
     delete?: never;
     options?: never;
     head?: never;
@@ -409,6 +513,29 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/projects/{projectId}/restores/{restoreId}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        restoreId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Cancel a queued or running restore
+     * @description Queued restores are cancelled immediately. Running restores stop at the next lease-checked boundary and leave no partial restore.
+     */
+    post: operations['cancelRestore'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/devices': {
     parameters: {
       query?: never;
@@ -488,10 +615,49 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    get?: never;
+    /** List invitation metadata without tokens */
+    get: operations['listInvitations'];
     put?: never;
     /** Create or replace an invitation */
     post: operations['createInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/invitations/{invitationId}/revoke': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        invitationId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Revoke an unused invitation */
+    post: operations['revokeInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/invitations/{invitationId}/resend': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        invitationId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Issue a replacement invitation token */
+    post: operations['resendInvitation'];
     delete?: never;
     options?: never;
     head?: never;
@@ -510,6 +676,23 @@ export interface paths {
      * @description Never returns payload content, content hashes, object keys, download URLs, or credentials.
      */
     get: operations['adminOverview'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/metrics/trends': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read daily synchronization outcome and latency trends */
+    get: operations['adminTrends'];
     put?: never;
     post?: never;
     delete?: never;
@@ -573,6 +756,42 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/admin/jobs': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List safe worker job metadata */
+    get: operations['adminListJobs'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/projects/{projectId}/restore-reopen': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reopen a project after verifying a failed restore */
+    post: operations['reopenRestoreProject'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/admin/sync-attempts': {
     parameters: {
       query?: never;
@@ -599,6 +818,23 @@ export interface paths {
     };
     /** List audit metadata */
     get: operations['adminAuditEvents'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/audit-events.csv': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Export audit metadata as CSV */
+    get: operations['adminAuditEventsCsv'];
     put?: never;
     post?: never;
     delete?: never;
@@ -659,6 +895,28 @@ export interface paths {
     put?: never;
     /** Enable an account */
     post: operations['enableAccount'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users/{userId}/purge': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Export and permanently purge an account
+     * @description The first request queues an opaque final export. A second request must confirm its exportId. Responses never include payloads, object keys, download URLs, or storage credentials.
+     */
+    post: operations['purgeAccount'];
     delete?: never;
     options?: never;
     head?: never;
@@ -892,13 +1150,14 @@ export interface components {
       targetChangeSequence?: number | null;
       reason: string;
       /** @enum {string} */
-      status: 'queued' | 'running' | 'succeeded' | 'failed';
+      status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
       /** Format: uuid */
       preRestoreSnapshotId?: string | null;
       generationBefore?: number | null;
       generationAfter?: number | null;
       restoredObjects: number;
       restoredTombstones: number;
+      cancelRequested: boolean;
       errorCode?: string | null;
       /** Format: date-time */
       createdAt: string;
@@ -906,6 +1165,9 @@ export interface components {
       startedAt?: string | null;
       /** Format: date-time */
       finishedAt?: string | null;
+      attempts?: number;
+      /** Format: date-time */
+      runAfter?: string | null;
     };
     PushItemResult:
       | components['schemas']['PushAppliedResult']
@@ -954,9 +1216,18 @@ export interface components {
       /** Format: uuid */
       deviceId: string;
     };
-    /** @description Desktop clients provide refreshToken. Administrator clients may omit the body and use the HttpOnly refresh cookie. */
+    AdminLoginRequest: {
+      /** Format: email */
+      email: string;
+      password: string;
+      /** Format: uuid */
+      deviceId: string;
+    };
+    AdminReauthRequest: {
+      password: string;
+    };
     RefreshTokenRequest: {
-      refreshToken?: string;
+      refreshToken: string;
     };
     InvitationActivationRequest: {
       invitationToken: string;
@@ -973,6 +1244,10 @@ export interface components {
       accessToken: string;
       expiresIn: number;
     };
+    ReauthResponse: {
+      nonce: string;
+      expiresIn: number;
+    };
     CurrentUser: {
       /** Format: uuid */
       id: string;
@@ -986,6 +1261,62 @@ export interface components {
     PasswordChangeRequest: {
       currentPassword: string;
       newPassword: string;
+    };
+    PurgeProjectRequest: {
+      password: string;
+      reason: string;
+    };
+    PurgeJob: {
+      /** Format: uuid */
+      id: string;
+      /** @enum {string} */
+      kind: 'project_purge';
+      /** Format: uuid */
+      ownerUserId: string;
+      /** Format: uuid */
+      projectId: string;
+      /** @enum {string} */
+      status: 'queued' | 'running' | 'succeeded' | 'failed';
+      attempts: number;
+      /** Format: date-time */
+      runAfter: string;
+      errorCode?: string | null;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      startedAt?: string | null;
+      /** Format: date-time */
+      finishedAt?: string | null;
+    };
+    AdminJobList: {
+      items: components['schemas']['JobMetadata'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
+    };
+    JobMetadata: {
+      /** Format: uuid */
+      id: string;
+      /** @enum {string} */
+      kind:
+        'project_purge' | 'account_purge' | 'snapshot_cleanup' | 'statistics';
+      /** Format: uuid */
+      ownerUserId?: string | null;
+      /** Format: uuid */
+      projectId?: string | null;
+      /** @enum {string} */
+      status: 'queued' | 'running' | 'succeeded' | 'failed';
+      attempts: number;
+      /** Format: date-time */
+      runAfter: string;
+      errorCode?: string | null;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      startedAt?: string | null;
+      /** Format: date-time */
+      finishedAt?: string | null;
     };
     ProjectRequest: {
       name: string;
@@ -1007,6 +1338,10 @@ export interface components {
     };
     ProjectList: {
       items: components['schemas']['Project'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
     };
     RegisterDeviceRequest: {
       /** Format: uuid */
@@ -1041,6 +1376,10 @@ export interface components {
     };
     DeviceList: {
       items: components['schemas']['Device'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
     };
     CreateInvitationRequest: {
       /** Format: email */
@@ -1055,8 +1394,46 @@ export interface components {
       /** Format: date-time */
       expiresAt: string;
     };
+    Invitation: {
+      /** Format: uuid */
+      id: string;
+      /** Format: email */
+      email: string;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      expiresAt: string;
+      /** Format: date-time */
+      usedAt?: string | null;
+      /** Format: date-time */
+      revokedAt?: string | null;
+      /** @enum {string} */
+      status: 'pending' | 'used' | 'expired' | 'revoked';
+    };
+    InvitationList: {
+      items: components['schemas']['Invitation'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
+    };
     ReasonRequest: {
       reason: string;
+    };
+    AccountPurgeRequest: {
+      /** Format: uuid */
+      exportId?: string | null;
+      confirmed: boolean;
+      reason: string;
+    };
+    AccountPurgeResponse: {
+      /** Format: uuid */
+      jobId: string;
+      /** Format: uuid */
+      exportId: string;
+      /** @enum {string} */
+      status: 'queued' | 'running' | 'ready';
+      confirmationRequired: boolean;
     };
     AdminUser: {
       /** Format: uuid */
@@ -1066,7 +1443,7 @@ export interface components {
       /** @enum {string} */
       role: 'user' | 'system_admin';
       /** @enum {string} */
-      status: 'active' | 'disabled' | 'pending' | 'deleting';
+      status: 'active' | 'disabled' | 'pending' | 'deleting' | 'deleted';
       /** Format: date-time */
       createdAt: string;
       /** Format: date-time */
@@ -1074,6 +1451,10 @@ export interface components {
     };
     AdminUserList: {
       items: components['schemas']['AdminUser'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
     };
     AdminOverview: {
       users: number;
@@ -1084,6 +1465,18 @@ export interface components {
       tombstones: number;
       payloadBytes: number;
       queuedRestores: number;
+    };
+    AdminTrendList: {
+      days: number;
+      items: {
+        /** Format: date-time */
+        day: string;
+        attempts: number;
+        succeeded: number;
+        conflicts: number;
+        p50LatencyMs?: number | null;
+        p99LatencyMs?: number | null;
+      }[];
     };
     AdminHistoryItem: {
       kind: components['schemas']['ObjectKind'];
@@ -1104,6 +1497,10 @@ export interface components {
     };
     RestoreJobList: {
       items: components['schemas']['RestoreJob'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
     };
     SyncAttempt: {
       /** Format: uuid */
@@ -1126,6 +1523,10 @@ export interface components {
     };
     SyncAttemptList: {
       items: components['schemas']['SyncAttempt'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
     };
     AuditEvent: {
       id: number;
@@ -1143,6 +1544,10 @@ export interface components {
     };
     AuditEventList: {
       items: components['schemas']['AuditEvent'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
     };
   };
   responses: {
@@ -1280,6 +1685,7 @@ export interface components {
     ContentHash: string;
     AfterSequence: number;
     Limit: number;
+    Offset: number;
   };
   requestBodies: never;
   headers: never;
@@ -1288,6 +1694,26 @@ export interface components {
 export type $defs = Record<string, never>;
 export interface operations {
   getOpenApiDocument: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The current OpenAPI document. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/yaml': string;
+        };
+      };
+    };
+  };
+  getApiV1OpenApiDocument: {
     parameters: {
       query?: never;
       header?: never;
@@ -1389,17 +1815,13 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Access credentials. Desktop clients receive refreshToken in JSON; system_admin clients receive it only as a Secure HttpOnly cookie. */
+      /** @description Access credentials for a regular user account. */
       200: {
         headers: {
-          /** @description Present for system_admin sessions and contains the rotated refresh token. */
-          'Set-Cookie'?: string;
           [name: string]: unknown;
         };
         content: {
-          'application/json':
-            | components['schemas']['TokenResponse']
-            | components['schemas']['AdminTokenResponse'];
+          'application/json': components['schemas']['TokenResponse'];
         };
       };
       400: components['responses']['InvalidRequest'];
@@ -1416,23 +1838,19 @@ export interface operations {
       path?: never;
       cookie?: never;
     };
-    requestBody?: {
+    requestBody: {
       content: {
         'application/json': components['schemas']['RefreshTokenRequest'];
       };
     };
     responses: {
-      /** @description Rotated access credentials. Desktop clients send refreshToken in JSON; system_admin clients use the refresh cookie. */
+      /** @description Rotated access credentials for a regular user account. */
       200: {
         headers: {
-          /** @description Present for system_admin sessions and replaces the refresh cookie. */
-          'Set-Cookie'?: string;
           [name: string]: unknown;
         };
         content: {
-          'application/json':
-            | components['schemas']['TokenResponse']
-            | components['schemas']['AdminTokenResponse'];
+          'application/json': components['schemas']['TokenResponse'];
         };
       };
       401: components['responses']['Unauthorized'];
@@ -1453,7 +1871,79 @@ export interface operations {
       /** @description The authenticated device sessions were revoked. */
       204: {
         headers: {
-          /** @description Clears the administrator refresh cookie when present. */
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminLogin: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AdminLoginRequest'];
+      };
+    };
+    responses: {
+      /** @description Administrator access token and a Secure HttpOnly tasktips_admin_refresh cookie. */
+      200: {
+        headers: {
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminTokenResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  adminRefreshToken: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Rotated administrator access token and refresh cookie. */
+      200: {
+        headers: {
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminTokenResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  adminLogout: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The administrator device session was revoked. */
+      204: {
+        headers: {
           'Set-Cookie'?: string;
           [name: string]: unknown;
         };
@@ -1461,6 +1951,34 @@ export interface operations {
       };
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
+    };
+  };
+  adminReauthenticate: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AdminReauthRequest'];
+      };
+    };
+    responses: {
+      /** @description A short-lived, one-use operation nonce. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ReauthResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      429: components['responses']['RateLimited'];
     };
   };
   activateInvitation: {
@@ -1664,6 +2182,37 @@ export interface operations {
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
       404: components['responses']['ProjectNotFound'];
+    };
+  };
+  purgeProject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PurgeProjectRequest'];
+      };
+    };
+    responses: {
+      /** @description Project deletion queued. The project enters deleting state immediately. */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PurgeJob'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['ProjectNotFound'];
+      409: components['responses']['Conflict'];
     };
   };
   getPayload: {
@@ -2041,6 +2590,38 @@ export interface operations {
       404: components['responses']['NotFound'];
     };
   };
+  cancelRestore: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+        restoreId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ReasonRequest'];
+      };
+    };
+    responses: {
+      /** @description Restore cancellation state. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RestoreJob'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+      409: components['responses']['Conflict'];
+    };
+  };
   listDevices: {
     parameters: {
       query?: never;
@@ -2146,6 +2727,28 @@ export interface operations {
       404: components['responses']['NotFound'];
     };
   };
+  listInvitations: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Invitation state and lifecycle metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['InvitationList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
   createInvitation: {
     parameters: {
       query?: never;
@@ -2174,6 +2777,59 @@ export interface operations {
       409: components['responses']['Conflict'];
     };
   };
+  revokeInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        invitationId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ReasonRequest'];
+      };
+    };
+    responses: {
+      /** @description Invitation revoked. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+    };
+  };
+  resendInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        invitationId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Replacement token, returned once for out-of-band delivery. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CreateInvitationResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+    };
+  };
   adminOverview: {
     parameters: {
       query?: never;
@@ -2192,6 +2848,31 @@ export interface operations {
           'application/json': components['schemas']['AdminOverview'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminTrends: {
+    parameters: {
+      query?: {
+        days?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Daily counts and latency percentiles without payload data. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminTrendList'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
     };
@@ -2259,6 +2940,8 @@ export interface operations {
     parameters: {
       query?: {
         projectId?: string;
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
       };
       header?: never;
       path?: never;
@@ -2279,9 +2962,69 @@ export interface operations {
       403: components['responses']['Forbidden'];
     };
   };
-  adminSyncAttempts: {
+  adminListJobs: {
+    parameters: {
+      query?: {
+        kind?:
+          'project_purge' | 'account_purge' | 'snapshot_cleanup' | 'statistics';
+        status?: 'queued' | 'running' | 'succeeded' | 'failed';
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Job metadata without internal payload or lease fields. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminJobList'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  reopenRestoreProject: {
     parameters: {
       query?: never;
+      header?: never;
+      path: {
+        projectId: components['parameters']['ProjectId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ReasonRequest'];
+      };
+    };
+    responses: {
+      /** @description Project reopened for synchronization. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  adminSyncAttempts: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
       header?: never;
       path?: never;
       cookie?: never;
@@ -2303,7 +3046,10 @@ export interface operations {
   };
   adminAuditEvents: {
     parameters: {
-      query?: never;
+      query?: {
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
       header?: never;
       path?: never;
       cookie?: never;
@@ -2323,9 +3069,34 @@ export interface operations {
       403: components['responses']['Forbidden'];
     };
   };
-  adminListUsers: {
+  adminAuditEventsCsv: {
     parameters: {
       query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Audit metadata CSV without payload content. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'text/csv': string;
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminListUsers: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
       header?: never;
       path?: never;
       cookie?: never;
@@ -2403,9 +3174,45 @@ export interface operations {
       409: components['responses']['Conflict'];
     };
   };
-  adminListUserProjects: {
+  purgeAccount: {
     parameters: {
       query?: never;
+      header: {
+        'X-Reauth-Nonce': string;
+      };
+      path: {
+        userId: components['parameters']['UserId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AccountPurgeRequest'];
+      };
+    };
+    responses: {
+      /** @description Purge phase queued. */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AccountPurgeResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      404: components['responses']['NotFound'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  adminListUserProjects: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
       header?: never;
       path: {
         userId: components['parameters']['UserId'];
@@ -2429,7 +3236,10 @@ export interface operations {
   };
   adminListUserDevices: {
     parameters: {
-      query?: never;
+      query?: {
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
       header?: never;
       path: {
         userId: components['parameters']['UserId'];

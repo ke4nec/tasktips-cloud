@@ -14,7 +14,7 @@
    chmod 600 deploy/secrets/tasktips_jwt_private_key
    ```
 
-3. 修改 `deploy/.env` 中的数据库 DSN、PostgreSQL 密码、RustFS access/secret key、cursor secret 和公网 HTTPS 地址。`TASKTIPS_PUBLIC_BASE_URL` 必须与 Caddy 的公开域名一致。
+3. 修改 `deploy/.env` 中的数据库 DSN、PostgreSQL 密码、RustFS access/secret key、cursor secret、公网 HTTPS 地址和 `TASKTIPS_ADMIN_ORIGIN`。`TASKTIPS_PUBLIC_BASE_URL` 必须与 Caddy 的公开域名一致；`TASKTIPS_ADMIN_ORIGIN` 必须精确匹配管理后台浏览器 origin。
 4. 校验并启动：
 
    ```sh
@@ -24,6 +24,21 @@
    ```
 
 `migrate` 成功前 API、worker 和 admin 不会启动。Caddy 是唯一公网入口；PostgreSQL、RustFS、`/metrics` 和容器内部端口不应映射到公网。
+
+当前开发阶段的数据库结构收敛在 `migrations/0001_init.sql`。首次部署或重建空库由
+`tasktips-api migrate` 执行该脚本；已有完整的旧分段迁移结构会被识别为同一最终结构并继续使用，
+不会改写业务数据。
+
+上传临时文件使用 `TASKTIPS_UPLOAD_TEMP_DIR`，每个 API 实例以
+`TASKTIPS_UPLOAD_TEMP_MAX_BYTES` 限制同时占用的字节数（默认 512 MiB）；进程启动时会清理超过
+一小时的残留文件。账号导出使用 `TASKTIPS_EXPORT_TMP_DIR`，单个导出临时工作区受
+`TASKTIPS_EXPORT_TMP_MAX_BYTES` 限制（默认 2 GiB），worker 启动时清理超过一天的残留工作区。
+上传、项目/账号 purge 的固定窗口桶写入 PostgreSQL，多个 API 副本共享同一限流状态。
+
+密码使用 Argon2id，参数由 `TASKTIPS_ARGON2_MEMORY_KIB`、`TASKTIPS_ARGON2_TIME_COST` 和
+`TASKTIPS_ARGON2_PARALLELISM` 配置，默认值为 19456/2/1，并限制在受支持范围内。部署前可运行
+`tasktips-api admin calibrate-password`，在目标机器上比较固定测试输入的耗时；选择约 150--300ms
+的组合后，将参数写入部署环境。PHC 哈希会携带参数，后续升级应保留旧哈希验证能力并在改密时使用新参数。
 
 首次创建管理员时，在 API 容器内交互输入密码：
 
@@ -37,7 +52,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml run --rm tasktips-a
 1. 阅读发布说明，确认迁移是 forward-only，并先完成备份。
 2. 拉取固定版本代码，执行 `docker compose ... config` 和镜像构建。
 3. `docker compose ... up --build -d` 会先运行迁移，再滚动启动 API、worker 和 admin。
-4. 检查 `/health/ready`、`/openapi.yaml`、管理员登录、bootstrap、payload 下载和 `/metrics` 内部响应。
+4. 检查 `/health/ready`、`/api/v1/openapi.yaml`（以及兼容的 `/openapi.yaml`）、管理员登录、bootstrap、payload 下载和 `/metrics` 内部响应。管理员登录、refresh、logout 和危险操作必须使用 `/api/v1/admin/*` 路径；发布后现有管理员会话需要重新登录。
 
 不要跳过迁移、回滚数据库 schema 或复用旧 JWT/cursor secret。应用回滚前必须确认新 schema 向后兼容；破坏性 API 使用新 `/api/vN` 路径。
 
@@ -68,7 +83,38 @@ TASKTIPS_RESTORE_RUSTFS_SECRET_KEY='...' \
   ./deploy/restore-drill.sh /secure/backups/tasktips-YYYYmmddTHHMMSSZ
 ```
 
+长期 worker 故障演练必须在上述隔离环境中先让一个 restore 进入 `running`，再运行：
+
+```sh
+TASKTIPS_DRILL_CONFIRM=YES \
+TASKTIPS_DRILL_DATABASE_URL='postgres://...' \
+TASKTIPS_DRILL_API_URL='https://isolated.example.test' \
+TASKTIPS_DRILL_ACCESS_TOKEN='...' \
+TASKTIPS_DRILL_PROJECT_ID='...' \
+TASKTIPS_DRILL_RESTORE_ID='...' \
+  ./deploy/restore-failure-drill.sh
+```
+
+脚本只会让目标 restore 的 lease 过期来模拟 worker 崩溃，然后轮询到 `succeeded`、`failed` 或
+`cancelled`；不会读取或打印 payload，也不会连接生产数据库。恢复任务不再需要时，用户可调用
+`POST /api/v1/projects/{projectId}/restores/{restoreId}/cancel`；排队任务立即取消，运行任务在
+下一个 lease 校验边界安全退出并重新开放项目。
+
 恢复后启动同版本 API/worker，按顺序验证：迁移、`/health/ready`、管理员登录、用户 bootstrap、payload 原始字节和 SHA-256、历史查询、快照创建、snapshot/change sequence 恢复、旧 generation push 拒绝，以及 RustFS/数据库引用完整性。记录耗时、抽样对象和结果；演练不通过前不切换生产流量。
+
+payload PUT 会先边读边哈希并写入操作系统临时目录，再以流式方式提交 RustFS；单请求上限为 10 MiB。
+生产环境应监控临时目录空间并设置容器/主机清理策略，避免并发上传耗尽本地磁盘。
+
+项目永久清除必须通过 `POST /api/v1/projects/{projectId}/purge` 提交当前用户密码和原因。接口只
+创建异步任务并立即将项目置为 `deleting`；worker 会先解除数据库引用再删除 RustFS 对象，失败任务
+按有限次数重试。
+
+账号永久清除必须由管理员在独立管理通道中先调用
+`POST /api/v1/admin/users/{userId}/purge`（`confirmed=false`）生成最终导出，再使用返回的
+`exportId`、`confirmed=true` 和一次性 `X-Reauth-Nonce` 确认。导出由 worker 写入私有 RustFS
+对象，管理 API 只返回任务/导出 ID 和状态，不提供正文、对象 key、下载 URL 或凭据。确认后账号进入
+`deleting`，worker 先解除全部项目、设备和会话引用，再删除对象，成功后保留最小审计引用并标记为
+`deleted`；失败会保持 `deleting`，只能重试或恢复任务。不能用直接 SQL 删除替代该流程。
 
 ## 监控与安全
 

@@ -29,14 +29,77 @@ use tower_http::{
 use auth::AuthService;
 use cursor::CursorSigner;
 use routes::{
-    activate_invitation, admin_audit_events, admin_create_restore, admin_history_metadata,
-    admin_list_devices, admin_list_projects, admin_list_users, admin_overview, admin_restore_jobs,
-    admin_sync_attempts, bootstrap, change_password, create_invitation, create_project,
-    create_restore, create_snapshot, current_user, disable_account, disable_project,
-    enable_account, get_payload, get_project, get_restore, head_payload, history, list_devices,
-    list_projects, list_snapshots, login, logout, object_history, pull, push, put_payload, refresh,
-    register_device, rename_project, revoke_device, update_device,
+    activate_invitation, admin_audit_events, admin_audit_events_csv, admin_create_restore,
+    admin_history_metadata, admin_jobs, admin_list_devices, admin_list_invitations,
+    admin_list_projects, admin_list_users, admin_login, admin_logout, admin_overview, admin_reauth,
+    admin_refresh, admin_resend_invitation, admin_restore_jobs, admin_revoke_invitation,
+    admin_sync_attempts, admin_trends, bootstrap, cancel_restore, change_password,
+    create_invitation, create_project, create_restore, create_snapshot, current_user,
+    disable_account, disable_project, enable_account, get_payload, get_project, get_restore,
+    head_payload, history, list_devices, list_projects, list_snapshots, login, logout,
+    object_history, pull, purge_account, purge_project, push, put_payload, refresh,
+    register_device, rename_project, reopen_restore_project, revoke_device, update_device,
 };
+
+const DEFAULT_UPLOAD_TEMP_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+pub(crate) struct TempUploadBudget {
+    used_bytes: AtomicU64,
+    max_bytes: u64,
+}
+
+impl Default for TempUploadBudget {
+    fn default() -> Self {
+        let max_bytes = std::env::var("TASKTIPS_UPLOAD_TEMP_MAX_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value >= 1024 * 1024)
+            .unwrap_or(DEFAULT_UPLOAD_TEMP_MAX_BYTES);
+        Self {
+            used_bytes: AtomicU64::new(0),
+            max_bytes,
+        }
+    }
+}
+
+impl TempUploadBudget {
+    pub(crate) fn reserve(self: &Arc<Self>, bytes: u64) -> Option<TempUploadReservation> {
+        let mut current = self.used_bytes.load(Ordering::Acquire);
+        loop {
+            let next = current.checked_add(bytes)?;
+            if next > self.max_bytes {
+                return None;
+            }
+            match self.used_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(TempUploadReservation {
+                        budget: Arc::clone(self),
+                        bytes,
+                    });
+                }
+                Err(observed) => current = observed,
+            }
+        }
+    }
+}
+
+pub(crate) struct TempUploadReservation {
+    budget: Arc<TempUploadBudget>,
+    bytes: u64,
+}
+
+impl Drop for TempUploadReservation {
+    fn drop(&mut self) {
+        self.budget
+            .used_bytes
+            .fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct AppState {
@@ -46,6 +109,8 @@ pub struct AppState {
     pub(crate) object_store: Option<ObjectStore>,
     pub(crate) cursor: Option<CursorSigner>,
     pub(crate) metrics: Arc<ApiMetrics>,
+    pub(crate) admin_origin: Option<Arc<str>>,
+    pub(crate) upload_budget: Arc<TempUploadBudget>,
 }
 
 #[derive(Default)]
@@ -86,6 +151,8 @@ impl AppState {
             object_store: None,
             cursor: None,
             metrics: Arc::new(ApiMetrics::default()),
+            admin_origin: None,
+            upload_budget: Arc::new(TempUploadBudget::default()),
         }
     }
 
@@ -93,6 +160,12 @@ impl AppState {
     pub fn with_sync(mut self, object_store: ObjectStore, cursor: CursorSigner) -> Self {
         self.object_store = Some(object_store);
         self.cursor = Some(cursor);
+        self
+    }
+
+    #[must_use]
+    pub fn with_admin_origin(mut self, origin: impl Into<Arc<str>>) -> Self {
+        self.admin_origin = Some(origin.into());
         self
     }
 
@@ -179,9 +252,14 @@ pub fn build_application_router(state: AppState) -> Router {
         .route("/health/ready", get(readiness_check))
         .route("/metrics", get(metrics))
         .route("/openapi.yaml", get(openapi))
+        .route("/api/v1/openapi.yaml", get(openapi))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/refresh", post(refresh))
         .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/admin/auth/login", post(admin_login))
+        .route("/api/v1/admin/auth/refresh", post(admin_refresh))
+        .route("/api/v1/admin/auth/logout", post(admin_logout))
+        .route("/api/v1/admin/auth/re-auth", post(admin_reauth))
         .route(
             "/api/v1/auth/invitations/activate",
             post(activate_invitation),
@@ -197,6 +275,7 @@ pub fn build_application_router(state: AppState) -> Router {
             "/api/v1/projects/{projectId}/disable",
             post(disable_project),
         )
+        .route("/api/v1/projects/{projectId}/purge", post(purge_project))
         .route(
             "/api/v1/projects/{projectId}/payloads/{contentHash}",
             get(get_payload).head(head_payload).put(put_payload),
@@ -224,17 +303,33 @@ pub fn build_application_router(state: AppState) -> Router {
             "/api/v1/projects/{projectId}/restores/{restoreId}",
             get(get_restore),
         )
+        .route(
+            "/api/v1/projects/{projectId}/restores/{restoreId}/cancel",
+            post(cancel_restore),
+        )
         .route("/api/v1/devices", get(list_devices))
         .route("/api/v1/devices/register", post(register_device))
         .route("/api/v1/devices/{deviceId}", patch(update_device))
         .route("/api/v1/devices/{deviceId}/revoke", post(revoke_device))
         .route("/api/v1/admin/users", get(admin_list_users))
-        .route("/api/v1/admin/invitations", post(create_invitation))
+        .route(
+            "/api/v1/admin/invitations",
+            get(admin_list_invitations).post(create_invitation),
+        )
+        .route(
+            "/api/v1/admin/invitations/{invitationId}/revoke",
+            post(admin_revoke_invitation),
+        )
+        .route(
+            "/api/v1/admin/invitations/{invitationId}/resend",
+            post(admin_resend_invitation),
+        )
         .route(
             "/api/v1/admin/users/{userId}/disable",
             post(disable_account),
         )
         .route("/api/v1/admin/users/{userId}/enable", post(enable_account))
+        .route("/api/v1/admin/users/{userId}/purge", post(purge_account))
         .route(
             "/api/v1/admin/users/{userId}/projects",
             get(admin_list_projects),
@@ -252,9 +347,19 @@ pub fn build_application_router(state: AppState) -> Router {
             "/api/v1/admin/projects/{projectId}/restores",
             post(admin_create_restore),
         )
+        .route(
+            "/api/v1/admin/projects/{projectId}/restore-reopen",
+            post(reopen_restore_project),
+        )
         .route("/api/v1/admin/restores", get(admin_restore_jobs))
+        .route("/api/v1/admin/jobs", get(admin_jobs))
         .route("/api/v1/admin/sync-attempts", get(admin_sync_attempts))
+        .route("/api/v1/admin/metrics/trends", get(admin_trends))
         .route("/api/v1/admin/audit-events", get(admin_audit_events))
+        .route(
+            "/api/v1/admin/audit-events.csv",
+            get(admin_audit_events_csv),
+        )
         .fallback(not_found)
         .with_state(state)
         .layer(
@@ -403,6 +508,17 @@ mod tests {
             response.headers()[header::CONTENT_TYPE],
             "application/yaml; charset=utf-8"
         );
+
+        let response = build_router(Readiness::unavailable())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/openapi.yaml")
+                    .body(Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::OK);
 
         let response = build_router(Readiness::unavailable())
             .oneshot(

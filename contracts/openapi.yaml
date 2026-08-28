@@ -37,6 +37,19 @@ paths:
             application/yaml:
               schema:
                 type: string
+  /api/v1/openapi.yaml:
+    get:
+      operationId: getApiV1OpenApiDocument
+      summary: Download the OpenAPI document
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: The current OpenAPI document.
+          content:
+            application/yaml:
+              schema:
+                type: string
   /health/live:
     get:
       operationId: getLiveness
@@ -96,18 +109,11 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: Access credentials. Desktop clients receive refreshToken in JSON; system_admin clients receive it only as a Secure HttpOnly cookie.
+          description: Access credentials for a regular user account.
           content:
             application/json:
               schema:
-                oneOf:
-                  - $ref: '#/components/schemas/TokenResponse'
-                  - $ref: '#/components/schemas/AdminTokenResponse'
-          headers:
-            Set-Cookie:
-              description: Present for system_admin sessions and contains the rotated refresh token.
-              schema:
-                type: string
+                $ref: '#/components/schemas/TokenResponse'
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '401':
@@ -125,25 +131,18 @@ paths:
       tags: [Authentication]
       security: []
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/RefreshTokenRequest'
       responses:
         '200':
-          description: Rotated access credentials. Desktop clients send refreshToken in JSON; system_admin clients use the refresh cookie.
+          description: Rotated access credentials for a regular user account.
           content:
             application/json:
               schema:
-                oneOf:
-                  - $ref: '#/components/schemas/TokenResponse'
-                  - $ref: '#/components/schemas/AdminTokenResponse'
-          headers:
-            Set-Cookie:
-              description: Present for system_admin sessions and replaces the refresh cookie.
-              schema:
-                type: string
+                $ref: '#/components/schemas/TokenResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -162,15 +161,110 @@ paths:
       responses:
         '204':
           description: The authenticated device sessions were revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/auth/login:
+    post:
+      operationId: adminLogin
+      summary: Authenticate a system administrator
+      tags: [Administration]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminLoginRequest'
+      responses:
+        '200':
+          description: Administrator access token and a Secure HttpOnly tasktips_admin_refresh cookie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTokenResponse'
           headers:
             Set-Cookie:
-              description: Clears the administrator refresh cookie when present.
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/v1/admin/auth/refresh:
+    post:
+      operationId: adminRefreshToken
+      summary: Rotate the administrator refresh cookie
+      tags: [Administration]
+      security: []
+      responses:
+        '200':
+          description: Rotated administrator access token and refresh cookie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTokenResponse'
+          headers:
+            Set-Cookie:
               schema:
                 type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/v1/admin/auth/logout:
+    post:
+      operationId: adminLogout
+      summary: Revoke the administrator device session
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: The administrator device session was revoked.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/auth/re-auth:
+    post:
+      operationId: adminReauthenticate
+      summary: Re-authenticate an administrator for a sensitive operation
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminReauthRequest'
+      responses:
+        '200':
+          description: A short-lived, one-use operation nonce.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReauthResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /api/v1/auth/invitations/activate:
     post:
       operationId: activateInvitation
@@ -350,6 +444,38 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/ProjectNotFound'
+  /api/v1/projects/{projectId}/purge:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: purgeProject
+      summary: Verify the owner password and queue irreversible project deletion
+      tags: [Projects]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurgeProjectRequest'
+      responses:
+        '202':
+          description: Project deletion queued. The project enters deleting state immediately.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurgeJob'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProjectNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/projects/{projectId}/payloads/{contentHash}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -743,6 +869,45 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/v1/projects/{projectId}/restores/{restoreId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: restoreId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: cancelRestore
+      summary: Cancel a queued or running restore
+      description: Queued restores are cancelled immediately. Running restores stop at the next lease-checked boundary and leave no partial restore.
+      tags: [Synchronization]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+      responses:
+        '200':
+          description: Restore cancellation state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreJob'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/devices:
     get:
       operationId: listDevices
@@ -842,6 +1007,23 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/admin/invitations:
+    get:
+      operationId: listInvitations
+      summary: List invitation metadata without tokens
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Invitation state and lifecycle metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       operationId: createInvitation
       summary: Create or replace an invitation
@@ -869,6 +1051,64 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+  /api/v1/admin/invitations/{invitationId}/revoke:
+    parameters:
+      - name: invitationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: revokeInvitation
+      summary: Revoke an unused invitation
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+      responses:
+        '204':
+          description: Invitation revoked.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/admin/invitations/{invitationId}/resend:
+    parameters:
+      - name: invitationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: resendInvitation
+      summary: Issue a replacement invitation token
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Replacement token, returned once for out-of-band delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateInvitationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/admin/overview:
     get:
       operationId: adminOverview
@@ -884,6 +1124,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminOverview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/metrics/trends:
+    get:
+      operationId: adminTrends
+      summary: Read daily synchronization outcome and latency trends
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 30
+      responses:
+        '200':
+          description: Daily counts and latency percentiles without payload data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTrendList'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -959,6 +1228,8 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Restore job metadata without manifest bodies.
@@ -970,6 +1241,67 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/jobs:
+    get:
+      operationId: adminListJobs
+      summary: List safe worker job metadata
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [project_purge, account_purge, snapshot_cleanup, statistics]
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [queued, running, succeeded, failed]
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Job metadata without internal payload or lease fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminJobList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/projects/{projectId}/restore-reopen:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: reopenRestoreProject
+      summary: Reopen a project after verifying a failed restore
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+      responses:
+        '204':
+          description: Project reopened for synchronization.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/admin/sync-attempts:
     get:
       operationId: adminSyncAttempts
@@ -977,6 +1309,9 @@ paths:
       tags: [Administration]
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Operation status, latency, and error codes only.
@@ -995,6 +1330,9 @@ paths:
       tags: [Administration]
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Audit events without payload data.
@@ -1002,6 +1340,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditEventList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/audit-events.csv:
+    get:
+      operationId: adminAuditEventsCsv
+      summary: Export audit metadata as CSV
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Audit metadata CSV without payload content.
+          content:
+            text/csv:
+              schema:
+                type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1014,6 +1370,9 @@ paths:
       tags: [Administration]
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Privacy-preserving account metadata.
@@ -1081,6 +1440,46 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /api/v1/admin/users/{userId}/purge:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      operationId: purgeAccount
+      summary: Export and permanently purge an account
+      description: The first request queues an opaque final export. A second request must confirm its exportId. Responses never include payloads, object keys, download URLs, or storage credentials.
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: X-Reauth-Nonce
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 32
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountPurgeRequest'
+      responses:
+        '202':
+          description: Purge phase queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountPurgeResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/admin/users/{userId}/projects:
     parameters:
       - $ref: '#/components/parameters/UserId'
@@ -1090,6 +1489,9 @@ paths:
       tags: [Administration]
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Project metadata without payload references.
@@ -1110,6 +1512,9 @@ paths:
       tags: [Administration]
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Device metadata without credentials.
@@ -1258,6 +1663,15 @@ components:
         minimum: 1
         maximum: 1000
         default: 200
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 1000000
+        default: 0
   schemas:
     HealthResponse:
       type: object
@@ -1630,7 +2044,7 @@ components:
     RestoreJob:
       type: object
       additionalProperties: false
-      required: [id, projectId, requestedBy, reason, status, restoredObjects, restoredTombstones, createdAt]
+      required: [id, projectId, requestedBy, reason, status, restoredObjects, restoredTombstones, cancelRequested, createdAt]
       properties:
         id:
           type: string
@@ -1651,7 +2065,7 @@ components:
           type: string
         status:
           type: string
-          enum: [queued, running, succeeded, failed]
+          enum: [queued, running, succeeded, failed, cancelled]
         preRestoreSnapshotId:
           type: [string, 'null']
           format: uuid
@@ -1667,6 +2081,8 @@ components:
         restoredTombstones:
           type: integer
           minimum: 0
+        cancelRequested:
+          type: boolean
         errorCode:
           type: [string, 'null']
         createdAt:
@@ -1676,6 +2092,12 @@ components:
           type: [string, 'null']
           format: date-time
         finishedAt:
+          type: [string, 'null']
+          format: date-time
+        attempts:
+          type: integer
+          minimum: 0
+        runAfter:
           type: [string, 'null']
           format: date-time
     PushItemResult:
@@ -1753,14 +2175,36 @@ components:
         deviceId:
           type: string
           format: uuid
+    AdminLoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, deviceId]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+        deviceId:
+          type: string
+          format: uuid
+    AdminReauthRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 1
     RefreshTokenRequest:
       type: object
       additionalProperties: false
+      required: [refreshToken]
       properties:
         refreshToken:
           type: string
           minLength: 1
-      description: Desktop clients provide refreshToken. Administrator clients may omit the body and use the HttpOnly refresh cookie.
     InvitationActivationRequest:
       type: object
       additionalProperties: false
@@ -1797,6 +2241,17 @@ components:
         expiresIn:
           type: integer
           minimum: 1
+    ReauthResponse:
+      type: object
+      additionalProperties: false
+      required: [nonce, expiresIn]
+      properties:
+        nonce:
+          type: string
+          minLength: 1
+        expiresIn:
+          type: integer
+          minimum: 1
     CurrentUser:
       type: object
       additionalProperties: false
@@ -1825,6 +2280,112 @@ components:
         newPassword:
           type: string
           minLength: 12
+    PurgeProjectRequest:
+      type: object
+      additionalProperties: false
+      required: [password, reason]
+      properties:
+        password:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+    PurgeJob:
+      type: object
+      additionalProperties: false
+      required: [id, kind, ownerUserId, projectId, status, attempts, runAfter, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [project_purge]
+        ownerUserId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed]
+        attempts:
+          type: integer
+          minimum: 0
+        runAfter:
+          type: string
+          format: date-time
+        errorCode:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        finishedAt:
+          type: [string, 'null']
+          format: date-time
+    AdminJobList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobMetadata'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+    JobMetadata:
+      type: object
+      additionalProperties: false
+      required: [id, kind, status, attempts, runAfter, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [project_purge, account_purge, snapshot_cleanup, statistics]
+        ownerUserId:
+          type: [string, 'null']
+          format: uuid
+        projectId:
+          type: [string, 'null']
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed]
+        attempts:
+          type: integer
+          minimum: 0
+        runAfter:
+          type: string
+          format: date-time
+        errorCode:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        finishedAt:
+          type: [string, 'null']
+          format: date-time
     ProjectRequest:
       type: object
       additionalProperties: false
@@ -1871,6 +2432,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Project'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
     RegisterDeviceRequest:
       type: object
       additionalProperties: false
@@ -1944,6 +2516,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Device'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
     CreateInvitationRequest:
       type: object
       additionalProperties: false
@@ -1968,6 +2551,52 @@ components:
         expiresAt:
           type: string
           format: date-time
+    Invitation:
+      type: object
+      additionalProperties: false
+      required: [id, email, createdAt, expiresAt, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        usedAt:
+          type: [string, 'null']
+          format: date-time
+        revokedAt:
+          type: [string, 'null']
+          format: date-time
+        status:
+          type: string
+          enum: [pending, used, expired, revoked]
+    InvitationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invitation'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
     ReasonRequest:
       type: object
       additionalProperties: false
@@ -1977,6 +2606,36 @@ components:
           type: string
           minLength: 1
           maxLength: 500
+    AccountPurgeRequest:
+      type: object
+      additionalProperties: false
+      required: [confirmed, reason]
+      properties:
+        exportId:
+          type: [string, 'null']
+          format: uuid
+        confirmed:
+          type: boolean
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+    AccountPurgeResponse:
+      type: object
+      additionalProperties: false
+      required: [jobId, exportId, status, confirmationRequired]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        exportId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, ready]
+        confirmationRequired:
+          type: boolean
     AdminUser:
       type: object
       additionalProperties: false
@@ -1993,7 +2652,7 @@ components:
           enum: [user, system_admin]
         status:
           type: string
-          enum: [active, disabled, pending, deleting]
+          enum: [active, disabled, pending, deleting, deleted]
         createdAt:
           type: string
           format: date-time
@@ -2009,6 +2668,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AdminUser'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
     AdminOverview:
       type: object
       additionalProperties: false
@@ -2038,6 +2708,40 @@ components:
         queuedRestores:
           type: integer
           minimum: 0
+    AdminTrendList:
+      type: object
+      additionalProperties: false
+      required: [items, days]
+      properties:
+        days:
+          type: integer
+          minimum: 1
+          maximum: 90
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [day, attempts, succeeded, conflicts]
+            properties:
+              day:
+                type: string
+                format: date-time
+              attempts:
+                type: integer
+                minimum: 0
+              succeeded:
+                type: integer
+                minimum: 0
+              conflicts:
+                type: integer
+                minimum: 0
+              p50LatencyMs:
+                type: [number, 'null']
+                minimum: 0
+              p99LatencyMs:
+                type: [number, 'null']
+                minimum: 0
     AdminHistoryItem:
       type: object
       additionalProperties: false
@@ -2087,6 +2791,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RestoreJob'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
     SyncAttempt:
       type: object
       additionalProperties: false
@@ -2130,6 +2845,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SyncAttempt'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
     AuditEvent:
       type: object
       additionalProperties: false
@@ -2165,3 +2891,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AuditEvent'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0

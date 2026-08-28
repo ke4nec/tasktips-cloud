@@ -12,6 +12,7 @@ hex.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tasktips-domain = { path = "../domain" }
+tasktips-application = { path = "../application" }
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
