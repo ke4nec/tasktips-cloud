@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { computed, ref } from 'vue';
+import { ref } from 'vue';
 
 import { apiClient } from '@/api/client';
 
@@ -7,14 +7,21 @@ export const useAuthStore = defineStore('auth', () => {
   const ready = ref(false);
   const loading = ref(false);
   const error = ref<string | undefined>();
-  const authenticated = computed(() => apiClient.hasAccessToken);
+  // Keep authentication reactive; ApiClient's token is intentionally private
+  // mutable state and cannot invalidate a Vue computed value by itself.
+  const authenticated = ref(apiClient.hasAccessToken);
+
+  function setAccessToken(token: string | undefined): void {
+    apiClient.setAccessToken(token);
+    authenticated.value = Boolean(token);
+  }
 
   async function restore(): Promise<void> {
     try {
       const tokens = await apiClient.refresh();
-      apiClient.setAccessToken(tokens.accessToken);
+      setAccessToken(tokens.accessToken);
     } catch {
-      apiClient.setAccessToken(undefined);
+      setAccessToken(undefined);
     } finally {
       ready.value = true;
     }
@@ -25,7 +32,7 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = undefined;
     try {
       const tokens = await apiClient.login(email, password);
-      apiClient.setAccessToken(tokens.accessToken);
+      setAccessToken(tokens.accessToken);
       return true;
     } catch (reason) {
       error.value = reason instanceof Error ? reason.message : '登录失败';
@@ -40,7 +47,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       await apiClient.logout();
     } finally {
-      apiClient.setAccessToken(undefined);
+      setAccessToken(undefined);
     }
   }
 
