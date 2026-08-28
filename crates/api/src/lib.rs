@@ -30,14 +30,14 @@ use auth::AuthService;
 use cursor::CursorSigner;
 use routes::{
     activate_invitation, admin_audit_events, admin_audit_events_csv, admin_create_restore,
-    admin_history_metadata, admin_jobs, admin_list_devices, admin_list_invitations,
-    admin_list_projects, admin_list_users, admin_login, admin_logout, admin_overview, admin_reauth,
-    admin_refresh, admin_resend_invitation, admin_restore_jobs, admin_revoke_invitation,
-    admin_sync_attempts, admin_trends, bootstrap, cancel_restore, change_password,
-    create_invitation, create_project, create_restore, create_snapshot, current_user,
-    disable_account, disable_project, enable_account, get_payload, get_project, get_restore,
-    head_payload, history, list_devices, list_projects, list_snapshots, login, logout,
-    object_history, pull, purge_account, purge_project, push, put_payload, refresh,
+    admin_history_metadata, admin_jobs, admin_list_all_devices, admin_list_all_projects,
+    admin_list_devices, admin_list_invitations, admin_list_projects, admin_list_users, admin_login,
+    admin_logout, admin_overview, admin_reauth, admin_refresh, admin_resend_invitation,
+    admin_restore_jobs, admin_revoke_invitation, admin_sync_attempts, admin_trends, bootstrap,
+    cancel_restore, change_password, create_invitation, create_project, create_restore,
+    create_snapshot, current_user, disable_account, disable_project, enable_account, get_payload,
+    get_project, get_restore, head_payload, history, list_devices, list_projects, list_snapshots,
+    login, logout, object_history, pull, purge_account, purge_project, push, put_payload, refresh,
     register_device, rename_project, reopen_restore_project, revoke_device, update_device,
 };
 
@@ -312,6 +312,8 @@ pub fn build_application_router(state: AppState) -> Router {
         .route("/api/v1/devices/{deviceId}", patch(update_device))
         .route("/api/v1/devices/{deviceId}/revoke", post(revoke_device))
         .route("/api/v1/admin/users", get(admin_list_users))
+        .route("/api/v1/admin/projects", get(admin_list_all_projects))
+        .route("/api/v1/admin/devices", get(admin_list_all_devices))
         .route(
             "/api/v1/admin/invitations",
             get(admin_list_invitations).post(create_invitation),

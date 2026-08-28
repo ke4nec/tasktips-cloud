@@ -1,8 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ApiClient } from './client';
+import { ApiClient, randomUuid } from './client';
+
+describe('randomUuid', () => {
+  it('uses crypto.randomUUID in secure contexts', () => {
+    const spy = vi
+      .spyOn(crypto, 'randomUUID')
+      .mockReturnValue('cf65cb63-93f2-4dc6-9d77-91ee45d16a09');
+    expect(randomUuid()).toBe('cf65cb63-93f2-4dc6-9d77-91ee45d16a09');
+    spy.mockRestore();
+  });
+
+  it('falls back to getRandomValues outside secure contexts', () => {
+    const secureContextCrypto = crypto;
+    vi.stubGlobal('crypto', {
+      getRandomValues:
+        secureContextCrypto.getRandomValues.bind(secureContextCrypto),
+    });
+    try {
+      const uuid = randomUuid();
+      expect(uuid).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      expect(randomUuid()).not.toBe(uuid);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe('ApiClient', () => {
+  it('binds the default fetcher to the global context', async () => {
+    const strictThisStub = async function (this: unknown): Promise<Response> {
+      // 未绑定时 this 是 ApiClient 实例或 undefined；真实浏览器会抛
+      // "'fetch' called on an object that does not implement interface Window"。
+      if (this !== globalThis) {
+        throw new Error('fetch invoked without the global this');
+      }
+      return new Response(
+        JSON.stringify({ status: 'live', database: null, objectStore: null }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    };
+    vi.stubGlobal('fetch', strictThisStub);
+    try {
+      await expect(new ApiClient().getLiveness()).resolves.toEqual({
+        status: 'live',
+        database: null,
+        objectStore: null,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it('uses the generated liveness path and response type', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -106,6 +156,26 @@ describe('ApiClient', () => {
 
     expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/admin/auth/refresh');
     expect(fetcher.mock.calls[1]?.[0]).toBe('/api/v1/admin/auth/logout');
+  });
+
+  it('uses globally paginated administrator project and device paths', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ items: [], hasMore: false }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const client = new ApiClient(fetcher);
+
+    await client.getAdminProjects({ limit: 25, offset: 50 });
+    await client.getAdminDevices({ limit: 25, offset: 50 });
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      '/api/v1/admin/projects?limit=25&offset=50',
+    );
+    expect(fetcher.mock.calls[1]?.[0]).toBe(
+      '/api/v1/admin/devices?limit=25&offset=50',
+    );
   });
 
   it('sends the administrator origin for restore requests', async () => {

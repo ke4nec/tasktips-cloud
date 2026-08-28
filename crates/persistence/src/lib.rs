@@ -4479,6 +4479,34 @@ impl Persistence {
             .0)
     }
 
+    /// Lists one page of project metadata across all accounts.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_list_all_projects_page(
+        &self,
+        actor_user_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<ProjectRecord>, bool), PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let mut projects = sqlx::query_as::<_, ProjectRecord>(
+            "SELECT id, owner_user_id, name, generation, status::text AS status, \
+                    change_seq AS change_sequence, created_at, updated_at \
+             FROM admin_project_metadata \
+             ORDER BY created_at, id LIMIT $1 OFFSET $2",
+        )
+        .bind(limit.saturating_add(1))
+        .bind(offset.max(0))
+        .fetch_all(&mut *tx)
+        .await?;
+        let has_more = i64::try_from(projects.len()).unwrap_or(i64::MAX) > limit;
+        if has_more {
+            projects.pop();
+        }
+        tx.commit().await?;
+        Ok((projects, has_more))
+    }
+
     /// Lists one page of project metadata for an account.
     #[allow(clippy::missing_errors_doc)]
     pub async fn admin_list_projects_page(
@@ -4521,6 +4549,34 @@ impl Persistence {
             .admin_list_devices_page(actor_user_id, subject_user_id, 500, 0)
             .await?
             .0)
+    }
+
+    /// Lists one page of device metadata across all accounts.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_list_all_devices_page(
+        &self,
+        actor_user_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<DeviceRecord>, bool), PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let mut devices = sqlx::query_as::<_, DeviceRecord>(
+            "SELECT id, owner_user_id, display_name, platform, app_version, created_at, \
+                    last_seen_at, last_login_at, last_pull_at, last_push_at, revoked_at \
+             FROM admin_device_metadata \
+             ORDER BY created_at, id LIMIT $1 OFFSET $2",
+        )
+        .bind(limit.saturating_add(1))
+        .bind(offset.max(0))
+        .fetch_all(&mut *tx)
+        .await?;
+        let has_more = i64::try_from(devices.len()).unwrap_or(i64::MAX) > limit;
+        if has_more {
+            devices.pop();
+        }
+        tx.commit().await?;
+        Ok((devices, has_more))
     }
 
     /// Lists one page of device metadata for an account.

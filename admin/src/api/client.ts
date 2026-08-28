@@ -21,7 +21,9 @@ export class ApiError extends Error {
 export class ApiClient {
   private accessToken: string | undefined;
 
-  constructor(private readonly fetcher: typeof fetch = fetch) {}
+  constructor(
+    private readonly fetcher: typeof fetch = fetch.bind(globalThis),
+  ) {}
 
   setAccessToken(token: string | undefined): void {
     this.accessToken = token;
@@ -77,6 +79,12 @@ export class ApiClient {
   }
 
   getAdminProjects(
+    query?: AdminPageQuery,
+  ): Promise<components['schemas']['ProjectList']> {
+    return this.get(`/api/v1/admin/projects${pageQuery(query)}`);
+  }
+
+  getAdminUserProjects(
     userId: string,
     query?: AdminPageQuery,
   ): Promise<components['schemas']['ProjectList']> {
@@ -86,6 +94,12 @@ export class ApiClient {
   }
 
   getAdminDevices(
+    query?: AdminPageQuery,
+  ): Promise<components['schemas']['DeviceList']> {
+    return this.get(`/api/v1/admin/devices${pageQuery(query)}`);
+  }
+
+  getAdminUserDevices(
     userId: string,
     query?: AdminPageQuery,
   ): Promise<components['schemas']['DeviceList']> {
@@ -261,10 +275,24 @@ function pageQuery(query?: AdminPageQuery): string {
   return `?${params.toString()}`;
 }
 
+export function randomUuid(): string {
+  const webCrypto = globalThis.crypto;
+  if (typeof webCrypto.randomUUID === 'function') return webCrypto.randomUUID();
+  // crypto.randomUUID 仅在安全上下文（HTTPS/localhost）可用；明文 HTTP 的
+  // 非 localhost origin 下不存在，但 getRandomValues 仍然可用。
+  const bytes = webCrypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function adminDeviceId(email: string): string {
   const normalizedEmail = email.trim().toLowerCase();
   const key = `tasktips_admin_device_id:${normalizedEmail}`;
-  const generated = crypto.randomUUID();
+  const generated = randomUuid();
   try {
     const existing = globalThis.localStorage?.getItem(key);
     if (existing) return existing;

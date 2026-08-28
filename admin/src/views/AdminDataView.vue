@@ -1,4 +1,29 @@
 <script setup lang="ts">
+import { ElAlert } from 'element-plus/es/components/alert/index.mjs';
+import 'element-plus/es/components/alert/style/css.mjs';
+import { ElButton } from 'element-plus/es/components/button/index.mjs';
+import 'element-plus/es/components/button/style/css.mjs';
+import { ElEmpty } from 'element-plus/es/components/empty/index.mjs';
+import 'element-plus/es/components/empty/style/css.mjs';
+import { ElForm, ElFormItem } from 'element-plus/es/components/form/index.mjs';
+import 'element-plus/es/components/form/style/css.mjs';
+import 'element-plus/es/components/form-item/style/css.mjs';
+import { ElInput } from 'element-plus/es/components/input/index.mjs';
+import 'element-plus/es/components/input/style/css.mjs';
+import { ElInputNumber } from 'element-plus/es/components/input-number/index.mjs';
+import 'element-plus/es/components/input-number/style/css.mjs';
+import {
+  ElSelect,
+  ElOption,
+} from 'element-plus/es/components/select/index.mjs';
+import 'element-plus/es/components/select/style/css.mjs';
+import { ElSkeleton } from 'element-plus/es/components/skeleton/index.mjs';
+import 'element-plus/es/components/skeleton/style/css.mjs';
+import {
+  ElTable,
+  ElTableColumn,
+} from 'element-plus/es/components/table/index.mjs';
+import 'element-plus/es/components/table/style/css.mjs';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -119,17 +144,14 @@ async function load(reset = false): Promise<void> {
       const response = await apiClient.getAdminAuditEvents(page);
       rows.value = response.items as Row[];
       hasMore.value = Boolean(response.hasMore);
+    } else if (props.section === 'projects') {
+      const response = await apiClient.getAdminProjects(page);
+      rows.value = response.items as Row[];
+      hasMore.value = Boolean(response.hasMore);
     } else {
-      const users = (await apiClient.getAdminUsers(page)).items;
-      const lists = await Promise.all(
-        users.map((user) =>
-          props.section === 'projects'
-            ? apiClient.getAdminProjects(user.id, page)
-            : apiClient.getAdminDevices(user.id, page),
-        ),
-      );
-      rows.value = lists.flatMap((list) => list.items as unknown as Row[]);
-      hasMore.value = Boolean(lists.some((list) => list.hasMore));
+      const response = await apiClient.getAdminDevices(page);
+      rows.value = response.items as Row[];
+      hasMore.value = Boolean(response.hasMore);
     }
     if (
       !projectRows.value.some(

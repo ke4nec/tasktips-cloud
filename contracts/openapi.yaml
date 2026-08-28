@@ -1128,6 +1128,54 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/projects:
+    get:
+      operationId: adminListProjects
+      summary: List project metadata across all accounts
+      description: Never returns payload content, content hashes, object keys, download URLs, or credentials.
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Globally paginated project metadata without payload references.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectList'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/devices:
+    get:
+      operationId: adminListDevices
+      summary: List device metadata across all accounts
+      description: Never returns refresh tokens, credentials, payload data, object keys, or download URLs.
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Globally paginated device metadata without credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceList'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/admin/metrics/trends:
     get:
       operationId: adminTrends

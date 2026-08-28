@@ -684,6 +684,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/admin/projects': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List project metadata across all accounts
+     * @description Never returns payload content, content hashes, object keys, download URLs, or credentials.
+     */
+    get: operations['adminListProjects'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/devices': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List device metadata across all accounts
+     * @description Never returns refresh tokens, credentials, payload data, object keys, or download URLs.
+     */
+    get: operations['adminListDevices'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/admin/metrics/trends': {
     parameters: {
       query?: never;
@@ -2848,6 +2888,58 @@ export interface operations {
           'application/json': components['schemas']['AdminOverview'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminListProjects: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Globally paginated project metadata without payload references. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ProjectList'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminListDevices: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Globally paginated device metadata without credentials. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeviceList'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
     };

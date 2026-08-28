@@ -43,7 +43,7 @@ async fn stage_b_http_workflow_enforces_isolation_and_rotation() {
 
     let test_id = Uuid::new_v4();
     let admin_email = format!("api-admin-{test_id}@example.test");
-    persistence
+    let admin_record = persistence
         .create_initial_admin(
             &admin_email,
             &admin_email,
@@ -51,7 +51,14 @@ async fn stage_b_http_workflow_enforces_isolation_and_rotation() {
         )
         .await
         .expect("admin should be created");
-    let admin = admin_login(&app, &admin_email, "admin-password-123", Uuid::new_v4()).await;
+    let admin = admin_login(
+        &app,
+        &admin_email,
+        "admin-password-123",
+        Uuid::new_v4(),
+        admin_record.id,
+    )
+    .await;
     assert_admin_refresh_cookie(&app, &admin_email).await;
     let user_one = invite_and_activate(&app, &admin.access_token, test_id, 1).await;
     let user_two = invite_and_activate(&app, &admin.access_token, test_id, 2).await;
@@ -63,7 +70,7 @@ async fn stage_b_http_workflow_enforces_isolation_and_rotation() {
     assert_logout_http_revokes_device_tokens(&app, &user_two).await;
     assert_device_http_revocation(&app, &user_two).await;
     assert_account_purge_requires_reauth(&app, &admin, &user_one).await;
-    assert_account_disable(&app, &admin, &user_one).await;
+    assert_account_disable(&app, &persistence, &admin, &user_one).await;
 }
 
 async fn assert_project_http_isolation(app: &Router, user_one: &Tokens, user_two: &Tokens) {
@@ -220,6 +227,8 @@ async fn assert_admin_http_boundary(
             format!("/api/v1/admin/users/{}/devices", user_two.user_id),
             None,
         ),
+        ("GET", "/api/v1/admin/projects".to_owned(), None),
+        ("GET", "/api/v1/admin/devices".to_owned(), None),
     ] {
         let (status, error) =
             json_request(app, method, &path, Some(&user_one.access_token), body).await;
@@ -258,6 +267,40 @@ async fn assert_admin_http_boundary(
         assert!(!serialized.contains("objectKey"));
         assert!(!serialized.contains("downloadUrl"));
         assert!(!serialized.contains("credential"));
+    }
+
+    for resource in ["projects", "devices"] {
+        let (status, first_page) = json_request(
+            app,
+            "GET",
+            &format!("/api/v1/admin/{resource}?limit=1&offset=0"),
+            Some(&admin.access_token),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(first_page["items"].as_array().unwrap().len(), 1);
+        assert_eq!(first_page["hasMore"], true);
+        assert_eq!(first_page["nextOffset"], 1);
+        let first_id = first_page["items"][0]["id"].clone();
+        let serialized = first_page.to_string();
+        assert!(!serialized.contains("payload"));
+        assert!(!serialized.contains("contentHash"));
+        assert!(!serialized.contains("objectKey"));
+        assert!(!serialized.contains("downloadUrl"));
+        assert!(!serialized.contains("credential"));
+
+        let (status, second_page) = json_request(
+            app,
+            "GET",
+            &format!("/api/v1/admin/{resource}?limit=1&offset=1"),
+            Some(&admin.access_token),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(second_page["items"].as_array().unwrap().len(), 1);
+        assert_ne!(second_page["items"][0]["id"], first_id);
     }
 
     let (status, overview) = json_request(
@@ -367,7 +410,12 @@ async fn assert_logout_http_revokes_device_tokens(app: &Router, user_two: &Token
     assert_eq!(error["code"], "AUTHENTICATION_REQUIRED");
 }
 
-async fn assert_account_disable(app: &Router, admin: &Tokens, user_one: &Tokens) {
+async fn assert_account_disable(
+    app: &Router,
+    persistence: &Persistence,
+    admin: &Tokens,
+    user_one: &Tokens,
+) {
     let pending_email = format!("pending-{}@example.test", Uuid::new_v4());
     let (status, _) = json_request(
         app,
@@ -378,20 +426,12 @@ async fn assert_account_disable(app: &Router, admin: &Tokens, user_one: &Tokens)
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    let (status, users) = json_request(
-        app,
-        "GET",
-        "/api/v1/admin/users",
-        Some(&admin.access_token),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let pending_user_id = users["items"]
-        .as_array()
-        .and_then(|items| items.iter().find(|user| user["email"] == pending_email))
-        .and_then(|user| user["id"].as_str())
-        .expect("pending user should be visible to admin");
+    let pending_user_id = persistence
+        .find_login_user(&pending_email)
+        .await
+        .expect("pending user lookup should succeed")
+        .expect("pending user should exist")
+        .id;
     let (status, error) = json_request(
         app,
         "POST",
@@ -468,7 +508,13 @@ struct Tokens {
     user_id: Uuid,
 }
 
-async fn admin_login(app: &Router, email: &str, password: &str, device_id: Uuid) -> Tokens {
+async fn admin_login(
+    app: &Router,
+    email: &str,
+    password: &str,
+    device_id: Uuid,
+    user_id: Uuid,
+) -> Tokens {
     let request = Request::builder()
         .method("POST")
         .uri("/api/v1/admin/auth/login")
@@ -490,16 +536,6 @@ async fn admin_login(app: &Router, email: &str, password: &str, device_id: Uuid)
         .expect("admin login body should collect");
     let body: Value = serde_json::from_slice(&bytes).expect("admin login should return JSON");
     let access_token = body["accessToken"].as_str().unwrap().to_owned();
-    let (status, users) =
-        json_request(app, "GET", "/api/v1/admin/users", Some(&access_token), None).await;
-    assert_eq!(status, StatusCode::OK);
-    let user_id = users["items"]
-        .as_array()
-        .and_then(|items| items.iter().find(|user| user["email"] == email))
-        .and_then(|user| user["id"].as_str())
-        .expect("admin user should be visible")
-        .parse()
-        .expect("admin user id should be a UUID");
     Tokens {
         access_token,
         refresh_token: String::new(),

@@ -2009,6 +2009,42 @@ pub async fn admin_list_users(
     ))
 }
 
+pub async fn admin_list_all_projects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let (projects, has_more) = database
+        .admin_list_all_projects_page(claims.sub, limit, offset)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": projects, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
+}
+
+pub async fn admin_list_all_devices(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let (devices, has_more) = database
+        .admin_list_all_devices_page(claims.sub, limit, offset)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": devices, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
+}
+
 pub async fn admin_list_projects(
     State(state): State<AppState>,
     ApiPath(user_id): ApiPath<Uuid>,
