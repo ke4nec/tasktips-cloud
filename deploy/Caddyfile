@@ -8,15 +8,15 @@
   }
 
   handle /api/* {
-    reverse_proxy tasktips-api:8080
+    reverse_proxy tasktips-api:18080
   }
 
   handle /health/* {
-    reverse_proxy tasktips-api:8080
+    reverse_proxy tasktips-api:18080
   }
 
   handle /openapi.yaml {
-    reverse_proxy tasktips-api:8080
+    reverse_proxy tasktips-api:18080
   }
 
   handle {

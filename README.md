@@ -40,7 +40,7 @@ npm run check
 cargo run -p tasktips-api
 ```
 
-默认监听 `127.0.0.1:8080`。`/health/live` 只验证进程；在 PostgreSQL 和 RustFS
+默认监听 `0.0.0.0:18080`。`/health/live` 只验证进程；在 PostgreSQL 和 RustFS
 不可用或配置缺失时，`/health/ready` 返回未就绪，并在依赖恢复后重新探测。
 
 ## 开发环境

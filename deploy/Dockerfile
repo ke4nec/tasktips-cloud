@@ -17,5 +17,5 @@ COPY --from=builder /app/target/release/tasktips-api /usr/local/bin/tasktips-api
 COPY --from=builder /app/target/release/tasktips-worker /usr/local/bin/tasktips-worker
 
 USER 65532:65532
-EXPOSE 8080
+EXPOSE 18080
 CMD ["tasktips-api"]

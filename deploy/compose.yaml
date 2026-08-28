@@ -1,7 +1,7 @@
 name: tasktips-cloud
 
 x-tasktips-environment: &tasktips-environment
-  TASKTIPS_BIND_ADDRESS: ${TASKTIPS_BIND_ADDRESS:-0.0.0.0:8080}
+  TASKTIPS_BIND_ADDRESS: ${TASKTIPS_BIND_ADDRESS:-0.0.0.0:18080}
   TASKTIPS_DATABASE_URL: ${TASKTIPS_DATABASE_URL:?TASKTIPS_DATABASE_URL is required}
   RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-http://rustfs:9000}
   RUSTFS_REGION: ${RUSTFS_REGION:-us-east-1}
@@ -83,7 +83,7 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: [CMD, curl, --fail, http://localhost:8080/health/ready]
+      test: [CMD, curl, --fail, http://localhost:18080/health/ready]
       interval: 10s
       timeout: 5s
       retries: 10

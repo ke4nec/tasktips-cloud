@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let address = env::var("TASKTIPS_BIND_ADDRESS")
-        .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
+        .unwrap_or_else(|_| "0.0.0.0:18080".to_owned())
         .parse::<SocketAddr>()?;
     let database = env::var("TASKTIPS_DATABASE_URL")
         .ok()
