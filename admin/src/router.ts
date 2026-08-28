@@ -1,46 +1,46 @@
 import { createRouter, createWebHistory } from 'vue-router';
 
-import LoginView from './views/LoginView.vue';
-import OverviewView from './views/OverviewView.vue';
-import AdminDataView from './views/AdminDataView.vue';
-
 export const router = createRouter({
   history: createWebHistory('/admin/'),
   routes: [
-    { path: '/login', name: 'login', component: LoginView },
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('./views/LoginView.vue'),
+    },
     {
       path: '/',
       name: 'overview',
-      component: OverviewView,
+      component: () => import('./views/OverviewView.vue'),
     },
     {
       path: '/users',
       name: 'users',
-      component: AdminDataView,
+      component: () => import('./views/AdminDataView.vue'),
       props: { section: 'users' },
     },
     {
       path: '/projects',
       name: 'projects',
-      component: AdminDataView,
+      component: () => import('./views/AdminDataView.vue'),
       props: { section: 'projects' },
     },
     {
       path: '/devices',
       name: 'devices',
-      component: AdminDataView,
+      component: () => import('./views/AdminDataView.vue'),
       props: { section: 'devices' },
     },
     {
       path: '/sync-attempts',
       name: 'sync-attempts',
-      component: AdminDataView,
+      component: () => import('./views/AdminDataView.vue'),
       props: { section: 'sync' },
     },
     {
       path: '/audit',
       name: 'audit',
-      component: AdminDataView,
+      component: () => import('./views/AdminDataView.vue'),
       props: { section: 'audit' },
     },
   ],

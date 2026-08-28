@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ElEmpty } from 'element-plus/es/components/empty/index.mjs';
+import 'element-plus/es/components/empty/style/css.mjs';
 import { useI18n } from 'vue-i18n';
 
 defineProps<{

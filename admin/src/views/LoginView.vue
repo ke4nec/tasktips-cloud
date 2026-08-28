@@ -1,5 +1,18 @@
 <script setup lang="ts">
 import { Lock, User } from '@element-plus/icons-vue';
+import { ElAlert } from 'element-plus/es/components/alert/index.mjs';
+import 'element-plus/es/components/alert/style/css.mjs';
+import { ElButton } from 'element-plus/es/components/button/index.mjs';
+import 'element-plus/es/components/button/style/css.mjs';
+import { ElCard } from 'element-plus/es/components/card/index.mjs';
+import 'element-plus/es/components/card/style/css.mjs';
+import { ElForm, ElFormItem } from 'element-plus/es/components/form/index.mjs';
+import 'element-plus/es/components/form/style/css.mjs';
+import 'element-plus/es/components/form-item/style/css.mjs';
+import { ElIcon } from 'element-plus/es/components/icon/index.mjs';
+import 'element-plus/es/components/icon/style/css.mjs';
+import { ElInput } from 'element-plus/es/components/input/index.mjs';
+import 'element-plus/es/components/input/style/css.mjs';
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';

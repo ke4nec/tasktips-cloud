@@ -1,4 +1,12 @@
 <script setup lang="ts">
+import { ElAlert } from 'element-plus/es/components/alert/index.mjs';
+import 'element-plus/es/components/alert/style/css.mjs';
+import { ElButton } from 'element-plus/es/components/button/index.mjs';
+import 'element-plus/es/components/button/style/css.mjs';
+import { ElCard } from 'element-plus/es/components/card/index.mjs';
+import 'element-plus/es/components/card/style/css.mjs';
+import { ElSkeleton } from 'element-plus/es/components/skeleton/index.mjs';
+import 'element-plus/es/components/skeleton/style/css.mjs';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 

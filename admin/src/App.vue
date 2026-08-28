@@ -7,6 +7,21 @@ import {
   Tickets,
   User,
 } from '@element-plus/icons-vue';
+import {
+  ElAside,
+  ElContainer,
+  ElHeader,
+  ElMain,
+} from 'element-plus/es/components/container/index.mjs';
+import 'element-plus/es/components/container/style/css.mjs';
+import { ElIcon } from 'element-plus/es/components/icon/index.mjs';
+import 'element-plus/es/components/icon/style/css.mjs';
+import { ElMenu, ElMenuItem } from 'element-plus/es/components/menu/index.mjs';
+import 'element-plus/es/components/menu/style/css.mjs';
+import { ElSkeleton } from 'element-plus/es/components/skeleton/index.mjs';
+import 'element-plus/es/components/skeleton/style/css.mjs';
+import { ElTag } from 'element-plus/es/components/tag/index.mjs';
+import 'element-plus/es/components/tag/style/css.mjs';
 import { storeToRefs } from 'pinia';
 import { onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';

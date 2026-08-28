@@ -43,6 +43,16 @@ cargo run -p tasktips-api
 默认监听 `0.0.0.0:18080`。`/health/live` 只验证进程；在 PostgreSQL 和 RustFS
 不可用或配置缺失时，`/health/ready` 返回未就绪，并在依赖恢复后重新探测。
 
+管理后台开发服务器监听 `0.0.0.0:5173`，API 请求代理到 `127.0.0.1:18080`：
+
+```text
+cd admin
+npm run dev
+```
+
+管理后台 refresh Cookie 固定为 `Secure`。本机开发使用 `http://localhost:5173/admin/`；
+从其他机器访问时应通过 HTTPS 反向代理，并让 `TASKTIPS_ADMIN_ORIGIN` 精确匹配浏览器 origin。
+
 ## 开发环境
 
 PostgreSQL 和 RustFS 通过独立的开发 Compose 启动，API 与 worker 在宿主机运行：
