@@ -813,6 +813,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/admin/operations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List globally ordered operational metadata
+     * @description Returns synchronization, restore, and worker job metadata without payload content.
+     */
+    get: operations['adminListOperations'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/admin/projects/{projectId}/restore-reopen': {
     parameters: {
       query?: never;
@@ -1330,6 +1350,34 @@ export interface components {
     };
     AdminJobList: {
       items: components['schemas']['JobMetadata'][];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+      limit?: number;
+      offset?: number;
+    };
+    AdminOperation: {
+      /** Format: uuid */
+      id: string;
+      /** @description Operation kind, such as push, restore, or project_purge. */
+      operation: string;
+      /** @description Source-specific operation status. */
+      status: string;
+      attempts: number;
+      /** Format: date-time */
+      runAfter?: string | null;
+      cancelRequested: boolean;
+      /** Format: uuid */
+      projectId?: string | null;
+      /** Format: uuid */
+      deviceId?: string | null;
+      itemCount?: number | null;
+      latencyMs?: number | null;
+      errorCode?: string | null;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    AdminOperationList: {
+      items: components['schemas']['AdminOperation'][];
       hasMore?: boolean;
       nextOffset?: number | null;
       limit?: number;
@@ -2895,6 +2943,8 @@ export interface operations {
   adminListProjects: {
     parameters: {
       query?: {
+        /** @description Filter by project name or UUID. */
+        search?: string;
         limit?: components['parameters']['Limit'];
         offset?: components['parameters']['Offset'];
       };
@@ -3078,6 +3128,32 @@ export interface operations {
           'application/json': components['schemas']['AdminJobList'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminListOperations: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        offset?: components['parameters']['Offset'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One globally ordered page of safe operational metadata. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminOperationList'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
     };

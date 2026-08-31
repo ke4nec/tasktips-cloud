@@ -46,11 +46,21 @@ const pageOffset = ref(0);
 const hasMore = ref(false);
 const pageSize = 100;
 const trendRows = ref<Row[]>([]);
+const restoreProjectRows = ref<Row[]>([]);
+const projectSearchLoading = ref(false);
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
+let loadSequence = 0;
+let projectSearchSequence = 0;
 
-const projectRows = computed(() =>
-  props.section === 'projects' ? rows.value : [],
-);
+const projectRows = computed(() => {
+  if (props.section !== 'projects') return [];
+  const projects = new Map<string, Row>();
+  for (const project of [...rows.value, ...restoreProjectRows.value]) {
+    const id = project.id;
+    if (id !== undefined && id !== null) projects.set(String(id), project);
+  }
+  return [...projects.values()];
+});
 
 const titles: Record<Section, string> = {
   users: 'navigation.users',
@@ -108,64 +118,92 @@ const columns: Record<Section, string[]> = {
   ],
 };
 
-async function load(reset = false): Promise<void> {
+async function load(reset = false, refreshTrends = true): Promise<void> {
   if (reset) pageOffset.value = 0;
+  const sequence = ++loadSequence;
+  const section = props.section;
   loading.value = true;
   error.value = undefined;
-  trendRows.value = [];
+  if (section === 'sync' && refreshTrends) trendRows.value = [];
   try {
     const page = { limit: pageSize, offset: pageOffset.value };
-    if (props.section === 'users') {
+    if (section === 'users') {
       const response = await apiClient.getAdminUsers(page);
+      if (sequence !== loadSequence) return;
       rows.value = response.items as Row[];
       hasMore.value = Boolean(response.hasMore);
-    } else if (props.section === 'sync') {
-      const [attempts, restoreJobs, jobs] = await Promise.all([
-        apiClient.getAdminSyncAttempts(page),
-        apiClient.getAdminRestoreJobs(page),
-        apiClient.getAdminJobs(page),
+    } else if (section === 'sync') {
+      const [operations, trends] = await Promise.all([
+        apiClient.getAdminOperations(page),
+        refreshTrends ? apiClient.getAdminTrends() : Promise.resolve(undefined),
       ]);
-      rows.value = attempts.items as Row[];
-      const restores = restoreJobs.items as Row[];
-      rows.value = [
-        ...rows.value,
-        ...restores.map((job) => ({ ...job, operation: 'restore' })),
-        ...(jobs.items as Row[]).map((job) => ({
-          ...job,
-          operation: job.kind,
-        })),
-      ];
-      hasMore.value = Boolean(
-        attempts.hasMore || restoreJobs.hasMore || jobs.hasMore,
-      );
-      const trends = await apiClient.getAdminTrends();
-      trendRows.value = trends.items as Row[];
-    } else if (props.section === 'audit') {
+      if (sequence !== loadSequence) return;
+      rows.value = operations.items as Row[];
+      hasMore.value = Boolean(operations.hasMore);
+      if (trends) trendRows.value = trends.items as Row[];
+    } else if (section === 'audit') {
       const response = await apiClient.getAdminAuditEvents(page);
+      if (sequence !== loadSequence) return;
       rows.value = response.items as Row[];
       hasMore.value = Boolean(response.hasMore);
-    } else if (props.section === 'projects') {
+    } else if (section === 'projects') {
       const response = await apiClient.getAdminProjects(page);
+      if (sequence !== loadSequence) return;
       rows.value = response.items as Row[];
+      restoreProjectRows.value = mergeRows(
+        restoreProjectRows.value,
+        response.items as Row[],
+      );
       hasMore.value = Boolean(response.hasMore);
     } else {
       const response = await apiClient.getAdminDevices(page);
+      if (sequence !== loadSequence) return;
       rows.value = response.items as Row[];
       hasMore.value = Boolean(response.hasMore);
     }
-    if (
-      !projectRows.value.some(
-        (project) => project.id === restoreProjectId.value,
-      )
-    ) {
-      restoreProjectId.value = '';
+  } catch (reason) {
+    if (sequence === loadSequence) {
+      error.value =
+        reason instanceof Error ? reason.message : t('page.loadFailed');
+    }
+  } finally {
+    if (sequence === loadSequence) loading.value = false;
+  }
+}
+
+async function searchProjects(query: string): Promise<void> {
+  if (props.section !== 'projects') return;
+  const sequence = ++projectSearchSequence;
+  projectSearchLoading.value = true;
+  try {
+    const response = await apiClient.getAdminProjects({
+      search: query.trim() || undefined,
+      limit: 50,
+      offset: 0,
+    });
+    if (sequence === projectSearchSequence && props.section === 'projects') {
+      restoreProjectRows.value = mergeRows(
+        restoreProjectRows.value,
+        response.items as Row[],
+      );
     }
   } catch (reason) {
-    error.value =
-      reason instanceof Error ? reason.message : t('page.loadFailed');
+    if (sequence === projectSearchSequence) {
+      error.value =
+        reason instanceof Error ? reason.message : t('page.loadFailed');
+    }
   } finally {
-    loading.value = false;
+    if (sequence === projectSearchSequence) projectSearchLoading.value = false;
   }
+}
+
+function mergeRows(existing: Row[], additions: Row[]): Row[] {
+  const rowsById = new Map<string, Row>();
+  for (const row of [...existing, ...additions]) {
+    const id = row.id;
+    if (id !== undefined && id !== null) rowsById.set(String(id), row);
+  }
+  return [...rowsById.values()];
 }
 
 function nextPage(): void {
@@ -184,7 +222,7 @@ function updatePolling(): void {
   refreshTimer = undefined;
   if (props.section === 'sync') {
     refreshTimer = setInterval(() => {
-      if (!loading.value) void load();
+      if (!loading.value && !document.hidden) void load(false, false);
     }, 15_000);
   }
 }
@@ -227,15 +265,18 @@ function display(value: unknown): string {
 watch(
   () => props.section,
   () => {
+    projectSearchSequence += 1;
     updatePolling();
-    void load(true);
+    void load(true, true);
   },
 );
 onMounted(() => {
   updatePolling();
-  void load(true);
+  void load(true, true);
 });
 onBeforeUnmount(() => {
+  loadSequence += 1;
+  projectSearchSequence += 1;
   if (refreshTimer) clearInterval(refreshTimer);
 });
 </script>
@@ -268,6 +309,9 @@ onBeforeUnmount(() => {
           v-model="restoreProjectId"
           :placeholder="t('restore.projectPlaceholder')"
           filterable
+          remote
+          :remote-method="searchProjects"
+          :loading="projectSearchLoading"
         >
           <el-option
             v-for="project in projectRows"

@@ -1137,6 +1137,13 @@ paths:
       security:
         - bearerAuth: []
       parameters:
+        - name: search
+          in: query
+          required: false
+          description: Filter by project name or UUID.
+          schema:
+            type: string
+            maxLength: 120
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
@@ -1318,6 +1325,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminJobList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/operations:
+    get:
+      operationId: adminListOperations
+      summary: List globally ordered operational metadata
+      description: Returns synchronization, restore, and worker job metadata without payload content.
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: One globally ordered page of safe operational metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOperationList'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -2386,6 +2417,65 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/JobMetadata'
+        hasMore:
+          type: boolean
+        nextOffset:
+          type: [integer, 'null']
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+    AdminOperation:
+      type: object
+      additionalProperties: false
+      required: [id, operation, status, attempts, cancelRequested, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        operation:
+          type: string
+          description: Operation kind, such as push, restore, or project_purge.
+        status:
+          type: string
+          description: Source-specific operation status.
+        attempts:
+          type: integer
+          minimum: 0
+        runAfter:
+          type: [string, 'null']
+          format: date-time
+        cancelRequested:
+          type: boolean
+        projectId:
+          type: [string, 'null']
+          format: uuid
+        deviceId:
+          type: [string, 'null']
+          format: uuid
+        itemCount:
+          type: [integer, 'null']
+          minimum: 0
+        latencyMs:
+          type: [integer, 'null']
+          minimum: 0
+        errorCode:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+    AdminOperationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminOperation'
         hasMore:
           type: boolean
         nextOffset:

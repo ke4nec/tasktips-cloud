@@ -5,6 +5,7 @@ type LivenessResponse =
 type ReadinessResponse =
   paths['/health/ready']['get']['responses'][200]['content']['application/json'];
 type AdminPageQuery = { limit?: number; offset?: number };
+type AdminProjectPageQuery = AdminPageQuery & { search?: string };
 
 export class ApiError extends Error {
   constructor(
@@ -79,7 +80,7 @@ export class ApiClient {
   }
 
   getAdminProjects(
-    query?: AdminPageQuery,
+    query?: AdminProjectPageQuery,
   ): Promise<components['schemas']['ProjectList']> {
     return this.get(`/api/v1/admin/projects${pageQuery(query)}`);
   }
@@ -137,6 +138,12 @@ export class ApiClient {
     if (query?.offset !== undefined) params.set('offset', String(query.offset));
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return this.get(`/api/v1/admin/jobs${suffix}`);
+  }
+
+  getAdminOperations(
+    query?: AdminPageQuery,
+  ): Promise<components['schemas']['AdminOperationList']> {
+    return this.get(`/api/v1/admin/operations${pageQuery(query)}`);
   }
 
   getAdminTrends(days = 30): Promise<components['schemas']['AdminTrendList']> {
@@ -266,10 +273,16 @@ export class ApiClient {
   }
 }
 
-function pageQuery(query?: AdminPageQuery): string {
-  if (!query || (query.limit === undefined && query.offset === undefined))
+function pageQuery(query?: AdminPageQuery | AdminProjectPageQuery): string {
+  if (
+    !query ||
+    (query.limit === undefined &&
+      query.offset === undefined &&
+      !('search' in query && query.search))
+  )
     return '';
   const params = new URLSearchParams();
+  if ('search' in query && query.search) params.set('search', query.search);
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.offset !== undefined) params.set('offset', String(query.offset));
   return `?${params.toString()}`;

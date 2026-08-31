@@ -326,6 +326,23 @@ pub struct SyncAttemptRecord {
 
 #[derive(Clone, Debug, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AdminOperationRecord {
+    pub id: Uuid,
+    pub operation: String,
+    pub status: String,
+    pub attempts: i32,
+    pub run_after: Option<OffsetDateTime>,
+    pub cancel_requested: bool,
+    pub project_id: Option<Uuid>,
+    pub device_id: Option<Uuid>,
+    pub item_count: Option<i32>,
+    pub latency_ms: Option<i32>,
+    pub error_code: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AdminTrendPoint {
     pub day: OffsetDateTime,
     pub attempts: i64,
@@ -4486,6 +4503,7 @@ impl Persistence {
         actor_user_id: Uuid,
         limit: i64,
         offset: i64,
+        search: Option<&str>,
     ) -> Result<(Vec<ProjectRecord>, bool), PersistenceError> {
         self.verify_admin(actor_user_id).await?;
         let mut tx = self.begin_admin().await?;
@@ -4493,8 +4511,10 @@ impl Persistence {
             "SELECT id, owner_user_id, name, generation, status::text AS status, \
                     change_seq AS change_sequence, created_at, updated_at \
              FROM admin_project_metadata \
-             ORDER BY created_at, id LIMIT $1 OFFSET $2",
+             WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%' OR id::text ILIKE '%' || $1 || '%') \
+             ORDER BY created_at, id LIMIT $2 OFFSET $3",
         )
+        .bind(search)
         .bind(limit.saturating_add(1))
         .bind(offset.max(0))
         .fetch_all(&mut *tx)
@@ -4885,6 +4905,49 @@ impl Persistence {
         }
         tx.commit().await?;
         Ok((attempts, has_more))
+    }
+
+    /// Lists a globally ordered, privacy-safe stream of operational metadata.
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_list_operations_page(
+        &self,
+        actor_user_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<AdminOperationRecord>, bool), PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        let mut tx = self.begin_admin().await?;
+        let mut operations = sqlx::query_as::<_, AdminOperationRecord>(
+            "SELECT id, operation, status, attempts, run_after, cancel_requested, project_id, \
+                    device_id, item_count, latency_ms, error_code, created_at \
+             FROM ( \
+                 SELECT id, operation, status, 0::integer AS attempts, \
+                        NULL::timestamptz AS run_after, false AS cancel_requested, \
+                        project_id, device_id, item_count, latency_ms, error_code, created_at \
+                 FROM sync_attempts \
+                 UNION ALL \
+                 SELECT id, 'restore'::text AS operation, status, attempts, run_after, \
+                        cancel_requested, project_id, NULL::uuid AS device_id, \
+                        restored_objects AS item_count, NULL::integer AS latency_ms, error_code, created_at \
+                 FROM admin_restore_job_metadata \
+                 UNION ALL \
+                 SELECT id, kind AS operation, status, attempts, run_after, \
+                        false AS cancel_requested, project_id, NULL::uuid AS device_id, \
+                        NULL::integer AS item_count, NULL::integer AS latency_ms, error_code, created_at \
+                 FROM admin_job_metadata \
+             ) operations \
+             ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
+        )
+        .bind(limit.saturating_add(1))
+        .bind(offset.max(0))
+        .fetch_all(&mut *tx)
+        .await?;
+        let has_more = i64::try_from(operations.len()).unwrap_or(i64::MAX) > limit;
+        if has_more {
+            operations.pop();
+        }
+        tx.commit().await?;
+        Ok((operations, has_more))
     }
 
     /// Lists recent audit metadata. Audit metadata is never populated from payload bodies.

@@ -178,6 +178,30 @@ describe('ApiClient', () => {
     );
   });
 
+  it('supports server-side project search and unified operations', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ items: [], hasMore: false }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const client = new ApiClient(fetcher);
+
+    await client.getAdminProjects({
+      search: 'project one',
+      limit: 50,
+      offset: 0,
+    });
+    await client.getAdminOperations({ limit: 100, offset: 0 });
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      '/api/v1/admin/projects?search=project+one&limit=50&offset=0',
+    );
+    expect(fetcher.mock.calls[1]?.[0]).toBe(
+      '/api/v1/admin/operations?limit=100&offset=0',
+    );
+  });
+
   it('sends the administrator origin for restore requests', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ status: 'queued' }), {

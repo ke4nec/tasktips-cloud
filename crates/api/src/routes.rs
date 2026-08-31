@@ -457,6 +457,14 @@ pub struct AdminPageQuery {
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminProjectQuery {
+    search: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminTrendQuery {
     days: Option<i32>,
 }
@@ -2012,13 +2020,21 @@ pub async fn admin_list_users(
 pub async fn admin_list_all_projects(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<AdminPageQuery>,
+    Query(query): Query<AdminProjectQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let request_id = request_id(&headers);
     let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
+    let search = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if search.is_some_and(|value| value.chars().count() > 120) {
+        return Err(ApiError::invalid("项目搜索条件无效", request_id));
+    }
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
     let (projects, has_more) = database
-        .admin_list_all_projects_page(claims.sub, limit, offset)
+        .admin_list_all_projects_page(claims.sub, limit, offset, search)
         .await
         .map_err(|error| map_persistence(error, request_id))?;
     let next_offset = has_more.then_some(offset.saturating_add(limit));
@@ -2234,6 +2250,24 @@ pub async fn admin_sync_attempts(
     let next_offset = has_more.then_some(offset.saturating_add(limit));
     Ok(Json(
         json!({"items": attempts, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
+    ))
+}
+
+pub async fn admin_operations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminPageQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let request_id = request_id(&headers);
+    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let (operations, has_more) = database
+        .admin_list_operations_page(claims.sub, limit, offset)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    let next_offset = has_more.then_some(offset.saturating_add(limit));
+    Ok(Json(
+        json!({"items": operations, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
     ))
 }
 

@@ -229,6 +229,7 @@ async fn assert_admin_http_boundary(
         ),
         ("GET", "/api/v1/admin/projects".to_owned(), None),
         ("GET", "/api/v1/admin/devices".to_owned(), None),
+        ("GET", "/api/v1/admin/operations".to_owned(), None),
     ] {
         let (status, error) =
             json_request(app, method, &path, Some(&user_one.access_token), body).await;
@@ -303,6 +304,17 @@ async fn assert_admin_http_boundary(
         assert_ne!(second_page["items"][0]["id"], first_id);
     }
 
+    let (status, filtered_projects) = json_request(
+        app,
+        "GET",
+        "/api/v1/admin/projects?search=User%20one&limit=100&offset=0",
+        Some(&admin.access_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(filtered_projects["items"].as_array().unwrap().len(), 1);
+
     let (status, overview) = json_request(
         app,
         "GET",
@@ -316,6 +328,7 @@ async fn assert_admin_http_boundary(
     assert!(!overview.to_string().contains("objectKey"));
     for path in [
         "/api/v1/admin/sync-attempts?limit=1&offset=0",
+        "/api/v1/admin/operations?limit=1&offset=0",
         "/api/v1/admin/audit-events?limit=1&offset=0",
         "/api/v1/admin/restores?limit=1&offset=0",
         "/api/v1/admin/jobs?limit=1&offset=0",
