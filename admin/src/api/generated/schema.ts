@@ -779,40 +779,6 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  '/api/v1/admin/restores': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** List restore jobs and counts */
-    get: operations['adminListRestores'];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/api/v1/admin/jobs': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** List safe worker job metadata */
-    get: operations['adminListJobs'];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
   '/api/v1/admin/operations': {
     parameters: {
       query?: never;
@@ -846,23 +812,6 @@ export interface paths {
     put?: never;
     /** Reopen a project after verifying a failed restore */
     post: operations['reopenRestoreProject'];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/api/v1/admin/sync-attempts': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** List synchronization diagnostics */
-    get: operations['adminSyncAttempts'];
-    put?: never;
-    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -1348,13 +1297,6 @@ export interface components {
       /** Format: date-time */
       finishedAt?: string | null;
     };
-    AdminJobList: {
-      items: components['schemas']['JobMetadata'][];
-      hasMore?: boolean;
-      nextOffset?: number | null;
-      limit?: number;
-      offset?: number;
-    };
     AdminOperation: {
       /** Format: uuid */
       id: string;
@@ -1382,29 +1324,6 @@ export interface components {
       nextOffset?: number | null;
       limit?: number;
       offset?: number;
-    };
-    JobMetadata: {
-      /** Format: uuid */
-      id: string;
-      /** @enum {string} */
-      kind:
-        'project_purge' | 'account_purge' | 'snapshot_cleanup' | 'statistics';
-      /** Format: uuid */
-      ownerUserId?: string | null;
-      /** Format: uuid */
-      projectId?: string | null;
-      /** @enum {string} */
-      status: 'queued' | 'running' | 'succeeded' | 'failed';
-      attempts: number;
-      /** Format: date-time */
-      runAfter: string;
-      errorCode?: string | null;
-      /** Format: date-time */
-      createdAt: string;
-      /** Format: date-time */
-      startedAt?: string | null;
-      /** Format: date-time */
-      finishedAt?: string | null;
     };
     ProjectRequest: {
       name: string;
@@ -1582,39 +1501,6 @@ export interface components {
       items: components['schemas']['AdminHistoryItem'][];
       hasMore: boolean;
       nextSequence?: number | null;
-    };
-    RestoreJobList: {
-      items: components['schemas']['RestoreJob'][];
-      hasMore?: boolean;
-      nextOffset?: number | null;
-      limit?: number;
-      offset?: number;
-    };
-    SyncAttempt: {
-      /** Format: uuid */
-      id: string;
-      /** Format: uuid */
-      ownerUserId: string;
-      /** Format: uuid */
-      projectId: string;
-      /** Format: uuid */
-      deviceId?: string | null;
-      /** @enum {string} */
-      operation: 'bootstrap' | 'pull' | 'push';
-      /** @enum {string} */
-      status: 'succeeded' | 'conflict' | 'rejected' | 'failed';
-      errorCode?: string | null;
-      itemCount: number;
-      latencyMs?: number | null;
-      /** Format: date-time */
-      createdAt: string;
-    };
-    SyncAttemptList: {
-      items: components['schemas']['SyncAttempt'][];
-      hasMore?: boolean;
-      nextOffset?: number | null;
-      limit?: number;
-      offset?: number;
     };
     AuditEvent: {
       id: number;
@@ -3078,60 +2964,6 @@ export interface operations {
       409: components['responses']['Conflict'];
     };
   };
-  adminListRestores: {
-    parameters: {
-      query?: {
-        projectId?: string;
-        limit?: components['parameters']['Limit'];
-        offset?: components['parameters']['Offset'];
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Restore job metadata without manifest bodies. */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['RestoreJobList'];
-        };
-      };
-      401: components['responses']['Unauthorized'];
-      403: components['responses']['Forbidden'];
-    };
-  };
-  adminListJobs: {
-    parameters: {
-      query?: {
-        kind?:
-          'project_purge' | 'account_purge' | 'snapshot_cleanup' | 'statistics';
-        status?: 'queued' | 'running' | 'succeeded' | 'failed';
-        limit?: components['parameters']['Limit'];
-        offset?: components['parameters']['Offset'];
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Job metadata without internal payload or lease fields. */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['AdminJobList'];
-        };
-      };
-      401: components['responses']['Unauthorized'];
-      403: components['responses']['Forbidden'];
-    };
-  };
   adminListOperations: {
     parameters: {
       query?: {
@@ -3185,31 +3017,6 @@ export interface operations {
       403: components['responses']['Forbidden'];
       404: components['responses']['NotFound'];
       409: components['responses']['Conflict'];
-    };
-  };
-  adminSyncAttempts: {
-    parameters: {
-      query?: {
-        limit?: components['parameters']['Limit'];
-        offset?: components['parameters']['Offset'];
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Operation status, latency, and error codes only. */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['SyncAttemptList'];
-        };
-      };
-      401: components['responses']['Unauthorized'];
-      403: components['responses']['Forbidden'];
     };
   };
   adminAuditEvents: {

@@ -433,23 +433,6 @@ pub struct ReasonRequest {
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AdminRestoreQuery {
-    project_id: Option<Uuid>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AdminJobQuery {
-    kind: Option<String>,
-    status: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminPageQuery {
     limit: Option<i64>,
     offset: Option<i64>,
@@ -2138,55 +2121,6 @@ pub async fn admin_history_metadata(
     ))
 }
 
-pub async fn admin_restore_jobs(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<AdminRestoreQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let request_id = request_id(&headers);
-    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
-    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let (jobs, has_more) = database
-        .admin_list_restore_jobs_page(claims.sub, query.project_id, limit, offset)
-        .await
-        .map_err(|error| map_persistence(error, request_id))?;
-    let next_offset = has_more.then_some(offset.saturating_add(limit));
-    Ok(Json(
-        json!({"items": jobs, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
-    ))
-}
-
-pub async fn admin_jobs(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<AdminJobQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let request_id = request_id(&headers);
-    let kind = query.kind.as_deref().map(str::trim);
-    if kind.is_some_and(|value| {
-        !matches!(
-            value,
-            "project_purge" | "account_purge" | "snapshot_cleanup" | "statistics"
-        )
-    }) {
-        return Err(ApiError::invalid("jobs kind 无效", request_id));
-    }
-    let status = query.status.as_deref().map(str::trim);
-    if status.is_some_and(|value| !matches!(value, "queued" | "running" | "succeeded" | "failed")) {
-        return Err(ApiError::invalid("jobs status 无效", request_id));
-    }
-    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
-    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let (jobs, has_more) = database
-        .admin_list_jobs_page(claims.sub, kind, status, limit, offset)
-        .await
-        .map_err(|error| map_persistence(error, request_id))?;
-    let next_offset = has_more.then_some(offset.saturating_add(limit));
-    Ok(Json(
-        json!({"items": jobs, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
-    ))
-}
-
 pub async fn admin_create_restore(
     State(state): State<AppState>,
     ApiPath(project_id): ApiPath<Uuid>,
@@ -2233,24 +2167,6 @@ pub async fn reopen_restore_project(
         .await
         .map_err(|error| map_project_error(error, request_id))?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn admin_sync_attempts(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<AdminPageQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let request_id = request_id(&headers);
-    let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
-    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let (attempts, has_more) = database
-        .admin_list_sync_attempts_page(claims.sub, limit, offset)
-        .await
-        .map_err(|error| map_persistence(error, request_id))?;
-    let next_offset = has_more.then_some(offset.saturating_add(limit));
-    Ok(Json(
-        json!({"items": attempts, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
-    ))
 }
 
 pub async fn admin_operations(

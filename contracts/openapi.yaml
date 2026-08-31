@@ -1269,66 +1269,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-  /api/v1/admin/restores:
-    get:
-      operationId: adminListRestores
-      summary: List restore jobs and counts
-      tags: [Administration]
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: projectId
-          in: query
-          required: false
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-      responses:
-        '200':
-          description: Restore job metadata without manifest bodies.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RestoreJobList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /api/v1/admin/jobs:
-    get:
-      operationId: adminListJobs
-      summary: List safe worker job metadata
-      tags: [Administration]
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: kind
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [project_purge, account_purge, snapshot_cleanup, statistics]
-        - name: status
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [queued, running, succeeded, failed]
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-      responses:
-        '200':
-          description: Job metadata without internal payload or lease fields.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AdminJobList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
   /api/v1/admin/operations:
     get:
       operationId: adminListOperations
@@ -1381,27 +1321,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-  /api/v1/admin/sync-attempts:
-    get:
-      operationId: adminSyncAttempts
-      summary: List synchronization diagnostics
-      tags: [Administration]
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-      responses:
-        '200':
-          description: Operation status, latency, and error codes only.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SyncAttemptList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
   /api/v1/admin/audit-events:
     get:
       operationId: adminAuditEvents
@@ -2408,26 +2327,6 @@ components:
         finishedAt:
           type: [string, 'null']
           format: date-time
-    AdminJobList:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/JobMetadata'
-        hasMore:
-          type: boolean
-        nextOffset:
-          type: [integer, 'null']
-          minimum: 0
-        limit:
-          type: integer
-          minimum: 1
-        offset:
-          type: integer
-          minimum: 0
     AdminOperation:
       type: object
       additionalProperties: false
@@ -2487,43 +2386,6 @@ components:
         offset:
           type: integer
           minimum: 0
-    JobMetadata:
-      type: object
-      additionalProperties: false
-      required: [id, kind, status, attempts, runAfter, createdAt]
-      properties:
-        id:
-          type: string
-          format: uuid
-        kind:
-          type: string
-          enum: [project_purge, account_purge, snapshot_cleanup, statistics]
-        ownerUserId:
-          type: [string, 'null']
-          format: uuid
-        projectId:
-          type: [string, 'null']
-          format: uuid
-        status:
-          type: string
-          enum: [queued, running, succeeded, failed]
-        attempts:
-          type: integer
-          minimum: 0
-        runAfter:
-          type: string
-          format: date-time
-        errorCode:
-          type: [string, 'null']
-        createdAt:
-          type: string
-          format: date-time
-        startedAt:
-          type: [string, 'null']
-          format: date-time
-        finishedAt:
-          type: [string, 'null']
-          format: date-time
     ProjectRequest:
       type: object
       additionalProperties: false
@@ -2919,80 +2781,6 @@ components:
           type: boolean
         nextSequence:
           type: [integer, 'null']
-          minimum: 0
-    RestoreJobList:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/RestoreJob'
-        hasMore:
-          type: boolean
-        nextOffset:
-          type: [integer, 'null']
-          minimum: 0
-        limit:
-          type: integer
-          minimum: 1
-        offset:
-          type: integer
-          minimum: 0
-    SyncAttempt:
-      type: object
-      additionalProperties: false
-      required: [id, ownerUserId, projectId, operation, status, itemCount, createdAt]
-      properties:
-        id:
-          type: string
-          format: uuid
-        ownerUserId:
-          type: string
-          format: uuid
-        projectId:
-          type: string
-          format: uuid
-        deviceId:
-          type: [string, 'null']
-          format: uuid
-        operation:
-          type: string
-          enum: [bootstrap, pull, push]
-        status:
-          type: string
-          enum: [succeeded, conflict, rejected, failed]
-        errorCode:
-          type: [string, 'null']
-        itemCount:
-          type: integer
-          minimum: 0
-        latencyMs:
-          type: [integer, 'null']
-          minimum: 0
-        createdAt:
-          type: string
-          format: date-time
-    SyncAttemptList:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/SyncAttempt'
-        hasMore:
-          type: boolean
-        nextOffset:
-          type: [integer, 'null']
-          minimum: 0
-        limit:
-          type: integer
-          minimum: 1
-        offset:
-          type: integer
           minimum: 0
     AuditEvent:
       type: object

@@ -107,37 +107,10 @@ export class ApiClient {
     return this.get(`/api/v1/admin/users/${userId}/devices${pageQuery(query)}`);
   }
 
-  getAdminSyncAttempts(
-    query?: AdminPageQuery,
-  ): Promise<components['schemas']['SyncAttemptList']> {
-    return this.get(`/api/v1/admin/sync-attempts${pageQuery(query)}`);
-  }
-
   getAdminAuditEvents(
     query?: AdminPageQuery,
   ): Promise<components['schemas']['AuditEventList']> {
     return this.get(`/api/v1/admin/audit-events${pageQuery(query)}`);
-  }
-
-  getAdminRestoreJobs(
-    query?: AdminPageQuery,
-  ): Promise<components['schemas']['RestoreJobList']> {
-    return this.get(`/api/v1/admin/restores${pageQuery(query)}`);
-  }
-
-  getAdminJobs(query?: {
-    kind?: components['schemas']['JobMetadata']['kind'];
-    status?: components['schemas']['JobMetadata']['status'];
-    limit?: number;
-    offset?: number;
-  }): Promise<components['schemas']['AdminJobList']> {
-    const params = new URLSearchParams();
-    if (query?.kind) params.set('kind', query.kind);
-    if (query?.status) params.set('status', query.status);
-    if (query?.limit !== undefined) params.set('limit', String(query.limit));
-    if (query?.offset !== undefined) params.set('offset', String(query.offset));
-    const suffix = params.toString() ? `?${params.toString()}` : '';
-    return this.get(`/api/v1/admin/jobs${suffix}`);
   }
 
   getAdminOperations(

@@ -327,11 +327,8 @@ async fn assert_admin_http_boundary(
     assert!(overview.get("payloadBytes").is_some());
     assert!(!overview.to_string().contains("objectKey"));
     for path in [
-        "/api/v1/admin/sync-attempts?limit=1&offset=0",
         "/api/v1/admin/operations?limit=1&offset=0",
         "/api/v1/admin/audit-events?limit=1&offset=0",
-        "/api/v1/admin/restores?limit=1&offset=0",
-        "/api/v1/admin/jobs?limit=1&offset=0",
     ] {
         let (status, metadata) =
             json_request(app, "GET", path, Some(&admin.access_token), None).await;
@@ -352,6 +349,15 @@ async fn assert_admin_http_boundary(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(trends["days"], 30);
     assert!(!trends.to_string().contains("contentHash"));
+
+    for path in [
+        "/api/v1/admin/sync-attempts",
+        "/api/v1/admin/restores",
+        "/api/v1/admin/jobs",
+    ] {
+        let (status, _) = json_request(app, "GET", path, Some(&admin.access_token), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
 }
 
 async fn assert_refresh_http_reuse(app: &Router, user_one: &Tokens) {

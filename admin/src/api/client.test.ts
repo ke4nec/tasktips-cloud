@@ -229,21 +229,6 @@ describe('ApiClient', () => {
     );
   });
 
-  it('filters safe administrator jobs metadata through the generated contract', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ items: [] }), {
-        headers: { 'content-type': 'application/json' },
-      }),
-    );
-    const client = new ApiClient(fetcher);
-    await client.getAdminJobs({ kind: 'project_purge', status: 'queued' });
-
-    expect(fetcher).toHaveBeenCalledWith(
-      '/api/v1/admin/jobs?kind=project_purge&status=queued',
-      expect.objectContaining({ credentials: 'include' }),
-    );
-  });
-
   it('sends the one-use re-auth nonce for account purge confirmation', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
