@@ -6,6 +6,12 @@
 # ${TASKTIPS_BACKEND_IMAGE} in deploy/compose.yaml (local `build` still works
 # as a fallback). It never bundles secrets: deploy/.env, deploy/secrets and
 # key material stay excluded via .dockerignore.
+#
+# APP_VERSION must stay in sync with the workspace version in Cargo.toml,
+# admin/package.json and contracts/openapi.yaml info.version. CI passes the
+# release version explicitly (--build-arg APP_VERSION=...); the default here
+# is the current release so local builds are stamped identically.
+ARG APP_VERSION=0.1.0
 FROM rust:1.97.1-bookworm AS builder
 
 WORKDIR /app
@@ -24,6 +30,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp target/release/tasktips-api target/release/tasktips-worker /tmp/
 
 FROM debian:bookworm-slim
+
+ARG APP_VERSION=0.1.0
+LABEL org.opencontainers.image.title="TaskTips Cloud backend" \
+      org.opencontainers.image.version="${APP_VERSION}"
+ENV TASKTIPS_VERSION=${APP_VERSION}
 
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes ca-certificates curl \

@@ -27,6 +27,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .json()
         .init();
 
+    if env::args().any(|argument| argument == "--version" || argument == "-V") {
+        println!("tasktips-worker {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let persistence = Persistence::connect(&env::var("TASKTIPS_DATABASE_URL")?).await?;
     let object_store = ObjectStore::with_credentials(
         RustFsConfig::new(
@@ -46,7 +50,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     restore_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     cleanup_export_temp_dir().await;
 
-    info!("tasktips worker started");
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "tasktips worker started"
+    );
     loop {
         tokio::select! {
             _ = restore_interval.tick() => {

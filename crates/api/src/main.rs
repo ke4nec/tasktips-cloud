@@ -20,6 +20,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     if arguments
         .first()
+        .is_some_and(|argument| argument == "--version" || argument == "-V")
+    {
+        println!("tasktips-api {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if arguments
+        .first()
         .is_some_and(|argument| argument == "migrate")
     {
         let database_url = env::var("TASKTIPS_DATABASE_URL")?;
@@ -68,7 +75,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     cleanup_upload_temp_dir().await;
     let listener = TcpListener::bind(address).await?;
-    info!(%address, "tasktips API listening");
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        %address,
+        "tasktips API listening"
+    );
 
     axum::serve(listener, build_application_router(state)).await?;
     Ok(())

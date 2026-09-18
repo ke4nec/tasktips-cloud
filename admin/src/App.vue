@@ -30,12 +30,19 @@ import { useRoute, useRouter } from 'vue-router';
 import { healthLabelKey, useHealthStore } from '@/stores/health';
 import { useAuthStore } from '@/stores/auth';
 
+import packageJson from '../package.json';
+
 const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
 const health = useHealthStore();
 const auth = useAuthStore();
 const { state, isLive } = storeToRefs(health);
+// Release version: Docker builds inject VITE_APP_VERSION (= APP_VERSION,
+// aligned with the backend Cargo version and the OpenAPI info.version);
+// local dev/build falls back to admin/package.json.
+// Keep in sync with Cargo.toml, contracts/openapi.yaml and deploy/*.Dockerfile.
+const appVersion = import.meta.env.VITE_APP_VERSION ?? packageJson.version;
 
 onMounted(async () => {
   await auth.restore();
@@ -60,6 +67,14 @@ watch(
       <strong>{{ t('app.name') }}</strong>
       <el-tag :type="isLive ? 'success' : 'info'" effect="plain" size="small">
         {{ t(healthLabelKey(state)) }}
+      </el-tag>
+      <el-tag
+        type="info"
+        effect="plain"
+        size="small"
+        :title="t('app.version', { version: appVersion })"
+      >
+        v{{ appVersion }}
       </el-tag>
     </el-header>
 

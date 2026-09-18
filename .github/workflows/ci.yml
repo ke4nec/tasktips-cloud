@@ -115,6 +115,28 @@ jobs:
         # Same one-command bootstrap operators use; --quiet keeps generated
         # secrets out of CI logs.
         run: bash deploy/setup.sh --quiet
+      - name: Check release version consistency
+        # Cargo workspace, admin console, OpenAPI contract, Dockerfile build
+        # args and Compose/env defaults must ship the same release version.
+        run: |
+          set -euo pipefail
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          admin_version=$(node -p "require('./admin/package.json').version")
+          lock_version=$(node -p "require('./admin/package-lock.json').version")
+          openapi_version=$(sed -n 's/^  version: //p' contracts/openapi.yaml | head -n 1)
+          backend_arg=$(sed -n 's/^ARG APP_VERSION=//p' deploy/Dockerfile)
+          admin_arg=$(sed -n 's/^ARG APP_VERSION=//p' deploy/Dockerfile.admin)
+          test "$cargo_version" = "$admin_version"
+          test "$cargo_version" = "$lock_version"
+          test "$cargo_version" = "$openapi_version"
+          test "$(echo "$backend_arg" | sort -u)" = "$cargo_version"
+          test "$(echo "$admin_arg" | sort -u)" = "$cargo_version"
+          grep -q "ke4nec/tasktips-cloud:$cargo_version" deploy/compose.yaml
+          grep -q "ke4nec/tasktips-cloud-admin:$cargo_version" deploy/compose.yaml
+          grep -q "ke4nec/tasktips-cloud:$cargo_version" deploy/env.example
+          grep -q "ke4nec/tasktips-cloud-admin:$cargo_version" deploy/env.example
+          echo "Release version consistent: $cargo_version"
+          echo "APP_VERSION=$cargo_version" >> "$GITHUB_ENV"
       - name: Validate Compose configuration
         run: docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
       - name: Build backend image
@@ -124,6 +146,8 @@ jobs:
           file: deploy/Dockerfile
           tags: tasktips-backend:test
           load: true
+          build-args: |
+            APP_VERSION=${{ env.APP_VERSION }}
           # Shares the Actions cache (one scope per image) with the Docker
           # Publish workflow so repeated builds reuse layers instead of
           # recompiling from scratch.
@@ -136,6 +160,8 @@ jobs:
           file: deploy/Dockerfile.admin
           tags: tasktips-admin:test
           load: true
+          build-args: |
+            APP_VERSION=${{ env.APP_VERSION }}
           cache-from: type=gha,scope=admin
           cache-to: type=gha,mode=max,scope=admin,ignore-error=true
       - name: Smoke test API image
@@ -163,6 +189,12 @@ jobs:
       - name: Smoke test worker and migrate binaries
         run: |
           docker run --rm tasktips-backend:test sh -c 'command -v tasktips-api && command -v tasktips-worker'
+          docker run --rm tasktips-backend:test tasktips-api --version | grep -q "${APP_VERSION}"
+          docker run --rm tasktips-backend:test tasktips-worker --version | grep -q "${APP_VERSION}"
+          test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' tasktips-backend:test)" = "${APP_VERSION}"
+          test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' tasktips-admin:test)" = "${APP_VERSION}"
+          docker inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' tasktips-backend:test | grep -q "TASKTIPS_VERSION=${APP_VERSION}"
+          docker inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' tasktips-admin:test | grep -q "TASKTIPS_VERSION=${APP_VERSION}"
       # Remove the placeholder secret/env, the test image and dangling build
       # state so neither the workspace nor the runner disk keeps CI artifacts.
       - name: Clean up CI artifacts

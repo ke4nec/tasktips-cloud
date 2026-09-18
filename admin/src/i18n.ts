@@ -7,6 +7,7 @@ const messages = {
       apiLive: 'API 在线',
       apiUnavailable: 'API 不可用',
       checking: '正在检查 API',
+      version: '版本 {version}',
     },
     auth: {
       subtitle: '使用管理员账号登录以查看运行元数据。',
@@ -106,6 +107,7 @@ const messages = {
       apiLive: 'API online',
       apiUnavailable: 'API unavailable',
       checking: 'Checking API',
+      version: 'Version {version}',
     },
     auth: {
       subtitle:

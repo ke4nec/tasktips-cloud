@@ -67,7 +67,11 @@ services:
     # Published backend image (see .github/workflows/docker-publish.yml).
     # `docker compose pull` uses the prebuilt image; `up --build` rebuilds
     # locally from deploy/Dockerfile instead.
-    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:latest}
+    # Default tags track the release version (0.1.0): bump them together with
+    # Cargo.toml, admin/package.json, contracts/openapi.yaml and the
+    # Dockerfiles' APP_VERSION. Override with TASKTIPS_BACKEND_IMAGE when a
+    # different tag (e.g. master) is needed.
+    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:0.1.0}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -81,7 +85,7 @@ services:
     restart: 'no'
 
   tasktips-api:
-    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:latest}
+    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:0.1.0}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -99,7 +103,7 @@ services:
     restart: unless-stopped
 
   tasktips-worker:
-    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:latest}
+    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:0.1.0}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -114,7 +118,8 @@ services:
 
   tasktips-admin:
     # Published admin image; same pull/build rule as the backend services.
-    image: ${TASKTIPS_ADMIN_IMAGE:-ke4nec/tasktips-cloud-admin:latest}
+    # Default tag tracks the release version, same rule as the backend image.
+    image: ${TASKTIPS_ADMIN_IMAGE:-ke4nec/tasktips-cloud-admin:0.1.0}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.admin

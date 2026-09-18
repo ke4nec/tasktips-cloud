@@ -75,6 +75,33 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Single release version shared by backend and admin images. A `vX.Y.Z`
+      # tag wins and must match the sources; otherwise the Cargo workspace
+      # version is used so local/branch builds are stamped with the same
+      # version the binaries and the admin console report at runtime.
+      - name: Resolve release version
+        id: release-version
+        run: |
+          set -euo pipefail
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          admin_version=$(node -p "require('./admin/package.json').version")
+          openapi_version=$(sed -n 's/^  version: //p' contracts/openapi.yaml | head -n 1)
+          if [ "$cargo_version" != "$admin_version" ] || [ "$cargo_version" != "$openapi_version" ]; then
+            echo "version mismatch: cargo=$cargo_version admin=$admin_version openapi=$openapi_version" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            tag_version="${GITHUB_REF#refs/tags/v}"
+            if [ "$tag_version" != "$cargo_version" ]; then
+              echo "tag v$tag_version does not match source version $cargo_version" >&2
+              exit 1
+            fi
+            echo "app_version=$tag_version" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_version=$cargo_version" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Release version: $(grep app_version "$GITHUB_OUTPUT" | cut -d= -f2)"
+
       - name: Extract image tags and labels
         id: meta
         uses: docker/metadata-action@v5
@@ -89,6 +116,7 @@ jobs:
             type=sha
           labels: |
             org.opencontainers.image.title=TaskTips Cloud ${{ matrix.target }}
+            org.opencontainers.image.version=${{ steps.release-version.outputs.app_version }}
 
       - name: Build and push image
         id: build
@@ -101,6 +129,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.release-version.outputs.app_version }}
           # Layer cache plus the cargo/npm cache mounts in the Dockerfiles are
           # persisted in the Actions cache (10 GB LRU, one scope per image) to
           # shorten follow-up builds. ignore-error keeps fork PRs green, where
