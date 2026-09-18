@@ -2,13 +2,17 @@ name: tasktips-cloud
 
 x-tasktips-environment: &tasktips-environment
   TASKTIPS_BIND_ADDRESS: ${TASKTIPS_BIND_ADDRESS:-0.0.0.0:18080}
-  TASKTIPS_DATABASE_URL: ${TASKTIPS_DATABASE_URL:?TASKTIPS_DATABASE_URL is required}
+  # Assembled from the postgres service credentials, so operators never write
+  # the DSN by hand. Passwords stay URL-safe because deploy/setup.sh only
+  # generates letters and digits; a hand-picked password with URL-reserved
+  # characters (/@#?…) must be percent-encoded here.
+  TASKTIPS_DATABASE_URL: postgres://${POSTGRES_USER:-tasktips}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - run bash deploy/setup.sh to generate it}@postgres:5432/${POSTGRES_DATABASE:-tasktips}
   RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-http://rustfs:9000}
   RUSTFS_REGION: ${RUSTFS_REGION:-us-east-1}
   RUSTFS_BUCKET: ${RUSTFS_BUCKET:-tasktips-data}
-  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
-  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
-  TASKTIPS_CURSOR_SIGNING_SECRET: ${TASKTIPS_CURSOR_SIGNING_SECRET:?TASKTIPS_CURSOR_SIGNING_SECRET is required}
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required - run bash deploy/setup.sh to generate it}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required - run bash deploy/setup.sh to generate it}
+  TASKTIPS_CURSOR_SIGNING_SECRET: ${TASKTIPS_CURSOR_SIGNING_SECRET:?TASKTIPS_CURSOR_SIGNING_SECRET is required - run bash deploy/setup.sh to generate it}
   TASKTIPS_ORPHAN_CLEANUP_INTERVAL_SECONDS: ${TASKTIPS_ORPHAN_CLEANUP_INTERVAL_SECONDS:-3600}
   TASKTIPS_JWT_ISSUER: ${TASKTIPS_JWT_ISSUER:-tasktips-cloud}
   TASKTIPS_JWT_AUDIENCE: ${TASKTIPS_JWT_AUDIENCE:-tasktips-desktop}
@@ -152,4 +156,4 @@ volumes:
 
 secrets:
   tasktips_jwt_private_key:
-    file: ${TASKTIPS_JWT_PRIVATE_KEY_SOURCE:?TASKTIPS_JWT_PRIVATE_KEY_SOURCE is required}
+    file: ${TASKTIPS_JWT_PRIVATE_KEY_SOURCE:-./secrets/tasktips_jwt_private_key}

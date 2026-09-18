@@ -4,21 +4,24 @@
 
 ## 首次部署
 
-1. 安装 Docker Engine、Compose v2、`openssl`、`pg_dump`/`pg_restore` 和 MinIO `mc`。
-2. 准备目录并复制示例配置：
+1. 安装 Docker Engine、Compose v2 和 `openssl`（备份/恢复另需 `pg_dump`/`pg_restore` 和 MinIO `mc`）。
+2. 一键生成配置与密钥（幂等，已存在的值不会被覆盖）：
 
    ```sh
-   cp deploy/env.example deploy/.env
-   mkdir -p deploy/secrets
-   openssl genpkey -algorithm ed25519 -out deploy/secrets/tasktips_jwt_private_key
-   chmod 600 deploy/secrets/tasktips_jwt_private_key
+   bash deploy/setup.sh --domain https://example.com
    ```
 
-   容器以非 root 用户（65532）运行，`deploy/secrets/tasktips_jwt_private_key`
-   的属主/权限必须让该 uid 可读（例如 `chown 65532 deploy/secrets/tasktips_jwt_private_key`
-   后保持 600，否则 API 会因无权读取 JWT 私钥而启动失败）。
+   不带 `--domain` 则默认 `http://localhost`（纯 HTTP，见下文 SSL 说明）。
+   生成的密码只用字母数字（可直接拼进数据库 URL），只在本次终端输出一次，
+   之后保存在 `deploy/.env`（git-ignored）；JWT 私钥落盘到
+   `deploy/secrets/tasktips_jwt_private_key`。数据库 DSN 由 Compose 用服务名
+   自动组装，不用手写。
 
-3. 修改 `deploy/.env` 中的数据库 DSN、PostgreSQL 密码、RustFS access/secret key、cursor secret、公网 HTTPS 地址和 `TASKTIPS_ADMIN_ORIGIN`。`TASKTIPS_PUBLIC_BASE_URL` 必须与 Caddy 的公开域名一致；`TASKTIPS_ADMIN_ORIGIN` 必须精确匹配管理后台浏览器 origin。
+   容器以非 root 用户（65532）运行，`deploy/secrets/tasktips_jwt_private_key`
+   必须让该 uid 可读：root 下执行 setup.sh 会自动 `chown 65532`；非 root 用户
+   会回退为 644 并打印警告。
+3. 检查 `deploy/.env`：`TASKTIPS_PUBLIC_BASE_URL` 须与 Caddy 公开域名一致；
+   `TASKTIPS_ADMIN_ORIGIN` 须精确匹配管理后台浏览器 origin（含协议、无尾斜杠）。
 4. 校验并启动（默认拉取 Docker Hub 预构建镜像 `ke4nec/tasktips-cloud`（后端）
    和 `ke4nec/tasktips-cloud-admin`（管理后台），可用 `TASKTIPS_BACKEND_IMAGE` /
    `TASKTIPS_ADMIN_IMAGE` 覆盖）：
@@ -33,6 +36,22 @@
    离线或定制构建时把 `pull` 换成 `up --build -d`，Compose 会改用
    `deploy/Dockerfile`（后端：API、worker、迁移）和 `deploy/Dockerfile.admin`
   （管理后台）在本地构建同样的两个镜像。
+
+## SSL 开关与密钥找回
+
+默认不启用 SSL：`TASKTIPS_PUBLIC_BASE_URL` 为 `http` 开头时 Caddy 只提供纯
+HTTP，不申请证书。需要 HTTPS 时把它改为 `https://你的域名`（DNS 须解析到本机
+并放行 80/443），重启 Caddy 后自动完成 ACME 申请与续期；改回 `http` 即关闭。
+
+密码类配置统一保存在 `deploy/.env`（`POSTGRES_PASSWORD`、`RUSTFS_ACCESS_KEY` /
+`RUSTFS_SECRET_KEY`、`TASKTIPS_CURSOR_SIGNING_SECRET`）；生效后的完整配置可用
+`docker compose --env-file deploy/.env -f deploy/compose.yaml config` 查看。
+密码不会出现在任何容器日志里，这是故意的——日志会被轮转和采集，不适合做密钥存储。
+
+注意：管理后台 refresh Cookie 固定带 `Secure` 标记。明文 HTTP 下只有经
+`localhost` 访问的浏览器会接受该 Cookie；用局域网 IP 明文访问时登录本身可用，
+但 refresh 续期会被浏览器拒绝（约 15 分钟后需重新登录）。需要长期稳定的内网
+访问请同样走 HTTPS（内网域名 + 自签/内网 CA，或直接用 `localhost` 跳板）。
 
 ## 镜像发布
 
