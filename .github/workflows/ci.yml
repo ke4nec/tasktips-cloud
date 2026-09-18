@@ -95,18 +95,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
       - name: Validate Compose configuration
         run: |
           mkdir -p deploy/secrets
           printf 'ci-placeholder-key' > deploy/secrets/tasktips_jwt_private_key
           cp deploy/env.example deploy/.env
           docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
-      - run: docker build --file deploy/Dockerfile --tag tasktips-cloud:test .
-      - run: docker build --file deploy/Dockerfile.admin --tag tasktips-admin:test .
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          tags: tasktips-backend:test
+          load: true
+          # Shares the Actions cache (one scope per image) with the Docker
+          # Publish workflow so repeated builds reuse layers instead of
+          # recompiling from scratch.
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend,ignore-error=true
+      - name: Build admin image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.admin
+          tags: tasktips-admin:test
+          load: true
+          cache-from: type=gha,scope=admin
+          cache-to: type=gha,mode=max,scope=admin,ignore-error=true
       - name: Smoke test API image
         run: |
-          docker run --detach --name tasktips-api-smoke --env TASKTIPS_BIND_ADDRESS=0.0.0.0:8080 --publish 18080:8080 tasktips-cloud:test
-          trap 'docker rm --force tasktips-api-smoke' EXIT
+          docker run --detach --name tasktips-api-smoke --env TASKTIPS_BIND_ADDRESS=0.0.0.0:8080 --publish 18080:8080 tasktips-backend:test
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:18080/health/live > /dev/null; then
               break
@@ -115,3 +134,28 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:18080/health/live > /dev/null
           curl --fail --silent http://127.0.0.1:18080/openapi.yaml > /dev/null
+      - name: Smoke test admin console image
+        run: |
+          docker run --detach --name tasktips-admin-smoke --publish 18081:8080 tasktips-admin:test
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18081/health > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18081/health
+          curl --fail --silent http://127.0.0.1:18081/ | grep -qi '<!doctype html'
+      - name: Smoke test worker and migrate binaries
+        run: |
+          docker run --rm tasktips-backend:test sh -c 'command -v tasktips-api && command -v tasktips-worker'
+      # Remove the placeholder secret/env, the test image and dangling build
+      # state so neither the workspace nor the runner disk keeps CI artifacts.
+      - name: Clean up CI artifacts
+        if: always()
+        run: |
+          docker rm --force tasktips-api-smoke tasktips-admin-smoke 2>/dev/null || true
+          docker rmi --force tasktips-backend:test tasktips-admin:test 2>/dev/null || true
+          rm -f deploy/.env deploy/secrets/tasktips_jwt_private_key
+          docker buildx prune --force --keep-storage 2GB
+          docker image prune --force
+          docker system df

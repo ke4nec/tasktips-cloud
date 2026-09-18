@@ -1,0 +1,124 @@
+name: Docker Publish
+
+# Builds the TaskTips Cloud images and pushes them to Docker Hub:
+#   backend (deploy/Dockerfile: API server, worker, one-shot migration)
+#   admin   (deploy/Dockerfile.admin: management console behind nginx)
+# Pull requests only build the images so Dockerfile changes are validated
+# without publishing anything.
+#
+# Triggers (per image):
+#   - push to master          -> publishes `latest`, `master`, `sha-<commit>`
+#   - push of a `v*` tag      -> publishes `vX.Y.Z`, `X.Y.Z`, `X.Y`, `sha-<commit>`
+#   - pull_request / dispatch -> build-only validation, nothing is pushed
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   DOCKERHUB_USERNAME - Docker Hub account or organization name
+#   DOCKERHUB_TOKEN    - Docker Hub access token (Account Settings > Security >
+#                        Personal access tokens), never a real password
+#
+# Optional repository variables:
+#   DOCKERHUB_BACKEND_REPOSITORY - backend image repository,
+#                                  defaults to ke4nec/tasktips-cloud
+#   DOCKERHUB_ADMIN_REPOSITORY   - admin image repository,
+#                                  defaults to ke4nec/tasktips-cloud-admin
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and push ${{ matrix.target }} image
+    runs-on: ubuntu-latest
+    concurrency:
+      group: docker-publish-${{ github.ref }}-${{ matrix.target }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: backend
+            dockerfile: deploy/Dockerfile
+          - target: admin
+            dockerfile: deploy/Dockerfile.admin
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image repository
+        id: repo
+        run: |
+          if [ "${{ matrix.target }}" = "backend" ]; then
+            echo "name=${BACKEND_REPOSITORY:-ke4nec/tasktips-cloud}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${ADMIN_REPOSITORY:-ke4nec/tasktips-cloud-admin}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BACKEND_REPOSITORY: ${{ vars.DOCKERHUB_BACKEND_REPOSITORY }}
+          ADMIN_REPOSITORY: ${{ vars.DOCKERHUB_ADMIN_REPOSITORY }}
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.repo.outputs.name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+          labels: |
+            org.opencontainers.image.title=TaskTips Cloud ${{ matrix.target }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          # Pull requests validate the Dockerfiles without publishing.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache plus the cargo/npm cache mounts in the Dockerfiles are
+          # persisted in the Actions cache (10 GB LRU, one scope per image) to
+          # shorten follow-up builds. ignore-error keeps fork PRs green, where
+          # the cache is read-only. No build artifacts are uploaded, so nothing
+          # accumulates under the repository's artifact storage.
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }},ignore-error=true
+
+      - name: Show published digest
+        if: github.event_name != 'pull_request'
+        run: echo "Published ${{ steps.repo.outputs.name }}@${{ steps.build.outputs.digest }}"
+
+      # The runner VM is discarded after the job, but leftover builder state
+      # and dangling images can still exhaust the runner disk mid-job on
+      # later steps, so drop them as soon as the push result is known.
+      - name: Clean up builder cache and dangling images
+        if: always()
+        run: |
+          docker buildx prune --force --keep-storage 2GB
+          docker image prune --force
+          docker system df

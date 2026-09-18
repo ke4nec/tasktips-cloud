@@ -79,7 +79,13 @@ cd deploy
 Copy-Item env.example .env
 New-Item -ItemType Directory -Force secrets
 # 将真实的 Ed25519 JWT 私钥写入 secrets/tasktips_jwt_private_key
-docker compose up --build
+docker compose pull
+docker compose up -d
 ```
+
+默认使用 Docker Hub 预构建镜像（后端 `ke4nec/tasktips-cloud`、管理后台
+`ke4nec/tasktips-cloud-admin`，可用 `TASKTIPS_BACKEND_IMAGE` /
+`TASKTIPS_ADMIN_IMAGE` 覆盖）；本地构建改用 `docker compose up --build`。发布流程见
+[`docs/self-hosting.md`](docs/self-hosting.md) 的“镜像发布”一节。
 
 不得把真实密码、JWT 私钥或 RustFS 凭据提交到 Git。

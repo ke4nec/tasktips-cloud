@@ -14,14 +14,33 @@
    chmod 600 deploy/secrets/tasktips_jwt_private_key
    ```
 
+   容器以非 root 用户（65532）运行，`deploy/secrets/tasktips_jwt_private_key`
+   的属主/权限必须让该 uid 可读（例如 `chown 65532 deploy/secrets/tasktips_jwt_private_key`
+   后保持 600，否则 API 会因无权读取 JWT 私钥而启动失败）。
+
 3. 修改 `deploy/.env` 中的数据库 DSN、PostgreSQL 密码、RustFS access/secret key、cursor secret、公网 HTTPS 地址和 `TASKTIPS_ADMIN_ORIGIN`。`TASKTIPS_PUBLIC_BASE_URL` 必须与 Caddy 的公开域名一致；`TASKTIPS_ADMIN_ORIGIN` 必须精确匹配管理后台浏览器 origin。
-4. 校验并启动：
+4. 校验并启动（默认拉取 Docker Hub 预构建镜像 `ke4nec/tasktips-cloud`（后端）
+   和 `ke4nec/tasktips-cloud-admin`（管理后台），可用 `TASKTIPS_BACKEND_IMAGE` /
+   `TASKTIPS_ADMIN_IMAGE` 覆盖）：
 
    ```sh
    docker compose --env-file deploy/.env -f deploy/compose.yaml config
-   docker compose --env-file deploy/.env -f deploy/compose.yaml up --build -d
+   docker compose --env-file deploy/.env -f deploy/compose.yaml pull
+   docker compose --env-file deploy/.env -f deploy/compose.yaml up -d
    docker compose --env-file deploy/.env -f deploy/compose.yaml ps
    ```
+
+   离线或定制构建时把 `pull` 换成 `up --build -d`，Compose 会改用
+   `deploy/Dockerfile`（后端：API、worker、迁移）和 `deploy/Dockerfile.admin`
+  （管理后台）在本地构建同样的两个镜像。
+
+## 镜像发布
+
+`.github/workflows/docker-publish.yml` 在 `master` 分支推送和 `v*` 标签推送时自动构建后端、admin 两个镜像并推送到 Docker Hub（`master` 发布 `latest`/`master`/`sha-<commit>`，`vX.Y.Z` 额外发布 `X.Y.Z`/`X.Y`）；Pull Request 只做构建验证，不推送。
+
+发布前需要在仓库设置中配置 Secrets `DOCKERHUB_USERNAME`（Docker Hub 账号或组织名）和 `DOCKERHUB_TOKEN`（Access Token，不要用真实密码）；镜像仓库默认为 `ke4nec/tasktips-cloud`（后端）和 `ke4nec/tasktips-cloud-admin`（管理后台），可用 Actions 变量 `DOCKERHUB_BACKEND_REPOSITORY` / `DOCKERHUB_ADMIN_REPOSITORY` 覆盖。
+
+构建使用 BuildKit Actions 缓存（`type=gha,mode=max`）复用 cargo/npm 层加速后续构建，不上传任何 artifact；任务结束时会裁剪 builder 缓存和悬空镜像，避免 runner 磁盘被中间产物占满。
 
 `migrate` 成功前 API、worker 和 admin 不会启动。Caddy 是唯一公网入口；PostgreSQL、RustFS、`/metrics` 和容器内部端口不应映射到公网。
 

@@ -60,6 +60,10 @@ services:
     restart: unless-stopped
 
   migrate:
+    # Published backend image (see .github/workflows/docker-publish.yml).
+    # `docker compose pull` uses the prebuilt image; `up --build` rebuilds
+    # locally from deploy/Dockerfile instead.
+    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -73,6 +77,7 @@ services:
     restart: 'no'
 
   tasktips-api:
+    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -90,6 +95,7 @@ services:
     restart: unless-stopped
 
   tasktips-worker:
+    image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -103,6 +109,8 @@ services:
     restart: unless-stopped
 
   tasktips-admin:
+    # Published admin image; same pull/build rule as the backend services.
+    image: ${TASKTIPS_ADMIN_IMAGE:-ke4nec/tasktips-cloud-admin:latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.admin
