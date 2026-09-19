@@ -41,8 +41,15 @@ describe('formatDateTime', () => {
   });
 
   it('normalizes the space-separated timestamp with second offsets', () => {
+    // The expected string is derived from the RFC 3339 equivalent of the same
+    // instant, so the assertion holds in every timezone.
+    const instant = new Date('2026-08-27T07:40:37.838146+00:00');
+    const pad = (value: number): string => String(value).padStart(2, '0');
+    const expected =
+      `${instant.getFullYear()}/${pad(instant.getMonth() + 1)}/` +
+      `${pad(instant.getDate())} ${pad(instant.getHours())}:${pad(instant.getMinutes())}`;
     expect(formatDateTime('2026-08-27 07:40:37.838146 +00:00:00')).toBe(
-      '2026/08/27 15:40',
+      expected,
     );
   });
 
