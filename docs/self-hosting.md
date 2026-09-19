@@ -5,17 +5,24 @@
 ## 首次部署
 
 1. 安装 Docker Engine、Compose v2 和 `openssl`（备份/恢复另需 `pg_dump`/`pg_restore` 和 MinIO `mc`）。
-2. 一键生成配置与密钥（幂等，已存在的值不会被覆盖）：
+2. 一键启动（本地预定义默认值开箱即用；想改用户名/密码/密钥直接编辑 `deploy/.env`）：
 
    ```sh
-   bash deploy/setup.sh --domain https://example.com
+   bash deploy/quickstart.sh --domain https://example.com
    ```
 
    不带 `--domain` 则默认 `http://localhost`（纯 HTTP，见下文 SSL 说明）。
-   生成的密码只用字母数字（可直接拼进数据库 URL），只在本次终端输出一次，
-   之后保存在 `deploy/.env`（git-ignored）；JWT 私钥落盘到
-   `deploy/secrets/tasktips_jwt_private_key`。数据库 DSN 由 Compose 用服务名
-   自动组装，不用手写。
+   首次运行会从 `deploy/env.example` 生成 `deploy/.env`（git-ignored，已存在不覆盖）
+   并补齐 JWT 私钥到 `deploy/secrets/tasktips_jwt_private_key`；之后改 `.env` 对应行
+   重建容器即生效。数据库 DSN 由 Compose 用服务名自动组装，不用手写。
+
+   公网生产必须先硬化（把试用默认值换成强随机密钥）：
+
+   ```sh
+   bash deploy/setup.sh --domain https://example.com --force
+   ```
+
+   强随机密码只用字母数字（可直接拼进数据库 URL），只在本次终端输出一次。
 
    容器以非 root 用户（65532）运行，`deploy/secrets/tasktips_jwt_private_key`
    必须让该 uid 可读：root 下执行 setup.sh 会自动 `chown 65532`；非 root 用户

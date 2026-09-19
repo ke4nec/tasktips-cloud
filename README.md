@@ -72,20 +72,24 @@ bucket。端口或凭据冲突时可用 `TASKTIPS_DEV_*` 环境变量覆盖。�
 
 ## 完整部署环境（新服务器）
 
-完整环境只需要 Docker Compose。`--domain` 可选，不传即 `http://localhost`
-纯 HTTP；公网域名确定后再加（Caddy 自动申请证书，也可事后改 `.env` 生效）：
+本地试用一条命令（预定义默认值开箱即用，用户名/密码想改就改 `.env`）：
 
 ```text
-cd deploy
-bash setup.sh --domain https://example.com
-docker compose pull
-docker compose up -d
-docker compose ps
+bash deploy/quickstart.sh
 ```
 
-`setup.sh` 一键生成全部密码与 JWT 私钥（幂等，可重复执行；生成值仅在终端显示
-一次，保存在 git-ignored 的 `.env` 里）。数据库 DSN 由 Compose 用服务名自动
+公网域名确定后再加（Caddy 自动申请证书，也可事后改 `.env` 生效）：
+
+```text
+bash deploy/quickstart.sh --domain https://example.com
+docker compose --env-file deploy/.env -f deploy/compose.yaml ps
+```
+
+`quickstart.sh` 会从 `env.example` 生成 git-ignored 的 `.env`（已存在不覆盖）、
+补齐 JWT 私钥并 `up -d` 全部 7 个服务。数据库 DSN 由 Compose 用服务名自动
 组装，无需手写。`migrate` 会自动先跑；RustFS bucket 由 API 自动建。
+公网生产必须用 `bash deploy/setup.sh --domain https://example.com --force`
+换成强随机密钥，不要把默认密钥暴露到公网。
 
 启动后创建首个管理员（无默认密码，交互式输入两次，≥12 位）：
 

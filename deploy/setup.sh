@@ -1,6 +1,8 @@
 #!/bin/sh
-# One-command bootstrap for self-hosting TaskTips Cloud.
+# 配置与密钥管理：本地试用直接用 env.example 预定义默认值 + quickstart.sh 一键启动；
+# 本脚本负责补齐缺失项（JWT 私钥）与生产硬化（--force 换强随机密钥、--domain 写公网地址）。
 #
+#   bash deploy/quickstart.sh                            # 本地试用（推荐）
 #   bash deploy/setup.sh [--domain https://example.com] [--admin-origin URL] [--force] [--quiet]
 #
 # Generates deploy/.env secrets (database/object-store passwords, cursor

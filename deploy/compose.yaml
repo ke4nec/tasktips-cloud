@@ -2,17 +2,17 @@ name: tasktips-cloud
 
 x-tasktips-environment: &tasktips-environment
   TASKTIPS_BIND_ADDRESS: ${TASKTIPS_BIND_ADDRESS:-0.0.0.0:18080}
-  # Assembled from the postgres service credentials, so operators never write
-  # the DSN by hand. Passwords stay URL-safe because deploy/setup.sh only
-  # generates letters and digits; a hand-picked password with URL-reserved
-  # characters (/@#?…) must be percent-encoded here.
-  TASKTIPS_DATABASE_URL: postgres://${POSTGRES_USER:-tasktips}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - run bash deploy/setup.sh to generate it}@postgres:5432/${POSTGRES_DATABASE:-tasktips}
+  # Local-first defaults: a fresh `docker compose up` works without any .env.
+  # These values are public and insecure by design (localhost trial only).
+  # For any public domain, run `bash deploy/setup.sh --force` to replace them
+  # with strong random secrets. setup.sh never overwrites existing .env entries.
+  TASKTIPS_DATABASE_URL: postgres://${POSTGRES_USER:-tasktips}:${POSTGRES_PASSWORD:-tasktips-dev}@postgres:5432/${POSTGRES_DATABASE:-tasktips}
   RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-http://rustfs:9000}
   RUSTFS_REGION: ${RUSTFS_REGION:-us-east-1}
   RUSTFS_BUCKET: ${RUSTFS_BUCKET:-tasktips-data}
-  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required - run bash deploy/setup.sh to generate it}
-  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required - run bash deploy/setup.sh to generate it}
-  TASKTIPS_CURSOR_SIGNING_SECRET: ${TASKTIPS_CURSOR_SIGNING_SECRET:?TASKTIPS_CURSOR_SIGNING_SECRET is required - run bash deploy/setup.sh to generate it}
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-tasktips-dev}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-tasktips-dev-secret}
+  TASKTIPS_CURSOR_SIGNING_SECRET: ${TASKTIPS_CURSOR_SIGNING_SECRET:-dev-only-cursor-signing-secret-32-bytes}
   TASKTIPS_ORPHAN_CLEANUP_INTERVAL_SECONDS: ${TASKTIPS_ORPHAN_CLEANUP_INTERVAL_SECONDS:-3600}
   TASKTIPS_JWT_ISSUER: ${TASKTIPS_JWT_ISSUER:-tasktips-cloud}
   TASKTIPS_JWT_AUDIENCE: ${TASKTIPS_JWT_AUDIENCE:-tasktips-desktop}
@@ -37,7 +37,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DATABASE:-tasktips}
       POSTGRES_USER: ${POSTGRES_USER:-tasktips}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tasktips-dev}
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 5s
@@ -52,8 +52,8 @@ services:
     environment:
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ENABLE: 'false'
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-tasktips-dev}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-tasktips-dev-secret}
     healthcheck:
       test: [CMD, curl, --fail, http://localhost:9000/health]
       interval: 5s
