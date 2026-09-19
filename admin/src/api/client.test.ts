@@ -264,31 +264,22 @@ describe('ApiClient', () => {
 
   it('posts self-registration without administrator headers', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          id: 'user-1',
-          email: 'user@example.test',
-          status: 'pending',
-        }),
-        { headers: { 'content-type': 'application/json' } },
-      ),
+      new Response(JSON.stringify({ message: 'accepted' }), {
+        headers: { 'content-type': 'application/json' },
+      }),
     );
     const client = new ApiClient(fetcher);
 
     await expect(
-      client.register('user@example.test', 'password-twelve'),
-    ).resolves.toEqual({
-      id: 'user-1',
-      email: 'user@example.test',
-      status: 'pending',
-    });
+      client.register('user@example.test', 'password-twelve1'),
+    ).resolves.toEqual({ message: 'accepted' });
     expect(fetcher).toHaveBeenCalledWith(
       '/api/v1/auth/register',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
           email: 'user@example.test',
-          password: 'password-twelve',
+          password: 'password-twelve1',
         }),
       }),
     );

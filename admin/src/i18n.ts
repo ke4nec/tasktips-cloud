@@ -93,6 +93,7 @@ const messages = {
     register: {
       subtitle: '注册新账号，管理员审核通过后即可使用。',
       confirm: '确认密码',
+      passwordHint: '12 位以上，且需包含字母和数字。',
       submit: '注册',
       submitFailed: '注册失败，请稍后重试。',
       closed: '自助注册当前未开放，请联系管理员。',
@@ -112,7 +113,7 @@ const messages = {
       enableReason: '重新启用账号',
       disableReason: '禁用账号',
       reasonRequired: '请填写操作原因。',
-      createHint: '请填写有效邮箱，并设置 12 位以上密码。',
+      createHint: '请填写有效邮箱，密码 12 位以上且含字母和数字。',
       passwordMismatch: '两次输入的密码不一致。',
       created: '用户已创建。',
       statusUpdated: '账号状态已更新。',
@@ -233,6 +234,7 @@ const messages = {
     register: {
       subtitle: 'Register a new account. It becomes usable after approval.',
       confirm: 'Confirm password',
+      passwordHint: 'At least 12 characters with both letters and digits.',
       submit: 'Register',
       submitFailed: 'Registration failed. Try again later.',
       closed: 'Self-service registration is closed. Contact an administrator.',
@@ -253,7 +255,7 @@ const messages = {
       disableReason: 'Disable account',
       reasonRequired: 'Provide a reason for this action.',
       createHint:
-        'Enter a valid email and a password of at least 12 characters.',
+        'Enter a valid email and a password of at least 12 characters with both letters and digits.',
       passwordMismatch: 'The passwords do not match.',
       created: 'User created.',
       statusUpdated: 'Account status updated.',

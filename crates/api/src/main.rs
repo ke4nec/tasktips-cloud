@@ -145,7 +145,7 @@ async fn create_admin(arguments: &[String]) -> Result<(), Box<dyn std::error::Er
     let email_normalized = normalize_email(email).ok_or("邮箱格式无效")?;
     let password = rpassword::prompt_password("密码: ")?;
     if !valid_password(&password) {
-        return Err("密码至少需要 12 个字符".into());
+        return Err("密码至少 12 位，且需包含字母和数字".into());
     }
     let confirmation = rpassword::prompt_password("再次输入密码: ")?;
     if password != confirmation {

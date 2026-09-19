@@ -98,6 +98,8 @@ pub fn normalize_email(email: &str) -> Option<String> {
 #[must_use]
 pub fn valid_password(password: &str) -> bool {
     password.chars().count() >= MIN_PASSWORD_LENGTH
+        && password.chars().any(|c| c.is_ascii_alphabetic())
+        && password.chars().any(|c| c.is_ascii_digit())
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

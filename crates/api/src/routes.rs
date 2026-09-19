@@ -333,9 +333,7 @@ pub struct RegisterRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterResponse {
-    id: Uuid,
-    email: String,
-    status: String,
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -1642,7 +1640,10 @@ pub async fn activate_invitation(
     )
     .await?;
     if !valid_password(&request.password) {
-        return Err(ApiError::invalid("密码至少需要 12 个字符", request_id));
+        return Err(ApiError::invalid(
+            "密码至少 12 位，且需包含字母和数字",
+            request_id,
+        ));
     }
     let password_hash = run_password_task(request.password, |password| hash_password(&password))
         .await
@@ -1681,6 +1682,8 @@ pub async fn activate_invitation(
     )
 }
 
+const REGISTER_ACCEPTED_MESSAGE: &str = "注册申请已提交，请等待管理员审核";
+
 pub async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1702,6 +1705,19 @@ pub async fn register(
         &request_id,
     )
     .await?;
+    // Stricter hourly budget per client IP (fixed identity, not per email)
+    // to slow bulk probing and fake signups.
+    enforce_shared_rate_limit_windowed(
+        database,
+        &format!(
+            "register-hourly:{}",
+            auth_rate_limit_key(&headers, "registration")
+        ),
+        10,
+        time::Duration::hours(1),
+        &request_id,
+    )
+    .await?;
     let enabled = database
         .registration_enabled()
         .await
@@ -1716,30 +1732,27 @@ pub async fn register(
         ));
     }
     if !valid_password(&request.password) {
-        return Err(ApiError::invalid("密码至少需要 12 个字符", request_id));
+        return Err(ApiError::invalid(
+            "密码至少 12 位，且需包含字母和数字",
+            request_id,
+        ));
     }
     let password_hash = run_password_task(request.password, |password| hash_password(&password))
         .await
         .map_err(|_| ApiError::internal(request_id.clone()))?;
-    let user = database
+    // Anti-enumeration: duplicate emails get the same 201 response as new
+    // registrations, so the endpoint cannot probe account existence.
+    match database
         .register_user(&email, request.email.trim(), &password_hash, &request_id)
         .await
-        .map_err(|error| match error {
-            PersistenceError::Conflict => ApiError::new(
-                StatusCode::CONFLICT,
-                "EMAIL_REGISTERED",
-                "该邮箱已注册",
-                false,
-                request_id.clone(),
-            ),
-            other => map_persistence(other, request_id.clone()),
-        })?;
+    {
+        Ok(_) | Err(PersistenceError::Conflict) => {}
+        Err(other) => return Err(map_persistence(other, request_id.clone())),
+    }
     Ok((
         StatusCode::CREATED,
         Json(RegisterResponse {
-            id: user.id,
-            email: user.email,
-            status: user.status,
+            message: REGISTER_ACCEPTED_MESSAGE.to_owned(),
         }),
     ))
 }
@@ -1785,7 +1798,10 @@ pub async fn change_password(
 ) -> Result<StatusCode, ApiError> {
     let request_id = request_id(&headers);
     if !valid_password(&request.new_password) {
-        return Err(ApiError::invalid("新密码至少需要 12 个字符", request_id));
+        return Err(ApiError::invalid(
+            "新密码至少 12 位，且需包含字母和数字",
+            request_id,
+        ));
     }
     let (database, claims) = authenticate(&state, &headers, &request_id).await?;
     let user = database
@@ -2047,7 +2063,10 @@ pub async fn admin_create_user(
         .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
     if !valid_password(&request.password) {
-        return Err(ApiError::invalid("密码至少需要 12 个字符", request_id));
+        return Err(ApiError::invalid(
+            "密码至少 12 位，且需包含字母和数字",
+            request_id,
+        ));
     }
     let password_hash = run_password_task(request.password, |password| hash_password(&password))
         .await
@@ -2699,8 +2718,25 @@ async fn enforce_shared_rate_limit(
     bucket_key: &str,
     request_id: &str,
 ) -> Result<(), ApiError> {
+    enforce_shared_rate_limit_windowed(
+        database,
+        bucket_key,
+        120,
+        time::Duration::minutes(1),
+        request_id,
+    )
+    .await
+}
+
+async fn enforce_shared_rate_limit_windowed(
+    database: &Persistence,
+    bucket_key: &str,
+    limit: u32,
+    period: time::Duration,
+    request_id: &str,
+) -> Result<(), ApiError> {
     let allowed = database
-        .consume_distributed_rate_limit(bucket_key, 120, time::Duration::minutes(1))
+        .consume_distributed_rate_limit(bucket_key, limit, period)
         .await
         .map_err(|error| map_persistence(error, request_id.to_owned()))?;
     if allowed {

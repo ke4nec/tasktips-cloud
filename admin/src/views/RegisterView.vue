@@ -30,10 +30,13 @@ const checking = ref(true);
 const registrationOpen = ref(false);
 const error = ref<string>();
 const succeeded = ref(false);
+const passwordComplex = (value: string): boolean =>
+  /[A-Za-z]/.test(value) && /[0-9]/.test(value);
 const canSubmit = computed(
   () =>
     email.value.trim().length > 0 &&
     password.value.length >= 12 &&
+    passwordComplex(password.value) &&
     confirm.value === password.value,
 );
 
@@ -104,6 +107,7 @@ async function submit(): Promise<void> {
               ><el-icon><Lock /></el-icon
             ></template>
           </el-input>
+          <p class="field-hint">{{ t('register.passwordHint') }}</p>
         </el-form-item>
         <el-form-item :label="t('register.confirm')">
           <el-input

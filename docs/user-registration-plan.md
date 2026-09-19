@@ -79,6 +79,9 @@
 
 ## 7. 安全要点（评审必查）
 
+- 注册去枚举化：重复邮箱返回与成功**完全相同**的 `201 {message}`，`RegisterResponse` 不含 `id/email/status`；管理后台直建保持明确 `409`（管理员本就可见用户列表，无 oracle 问题）。
+- 密码复杂度：中央 `valid_password` 要求 ≥12 位 + 含字母 + 含数字（注册/邀请激活/改密/直建/CLI 建管理员统一生效）。
+- 注册三层限流：进程内 `120/min` + 共享 `120/min`（按账号）+ 共享 `10/hour` 按客户端 IP（固定 identity，不按邮箱分桶，换邮箱绕不过）。
 - `pending/disabled` 账号的登录、`refresh` 轮换、同步 `bootstrap/pull/push` 全链路拒绝，已有 `lock_active_user` 的补齐 `refresh` 路径检查。
 - 注册/激活限流与邀请同级；错误信息不区分“邮箱已存在/不存在”之外的细节。
 - 管理后台返回与日志永不含密码、`token`、邀请 `token` 明文（创建邀请的 `token` 仅创建响应返回一次，与现状一致）。

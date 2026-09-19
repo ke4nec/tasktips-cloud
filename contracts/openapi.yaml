@@ -296,6 +296,8 @@ paths:
       summary: Self-register an account pending administrator approval
       description: Creates a disabled-by-default account. The account stays
         pending until an administrator enables it; no tokens are issued.
+        Duplicate emails receive the identical 201 response so the endpoint
+        cannot probe account existence.
       tags: [Authentication]
       security: []
       requestBody:
@@ -315,8 +317,6 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '409':
-          $ref: '#/components/responses/Conflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '408':
@@ -2346,17 +2346,13 @@ components:
         password:
           type: string
           minLength: 12
+          description: At least 12 characters with both letters and digits.
     RegisterResponse:
       type: object
       additionalProperties: false
-      required: [id, email, status]
+      required: [message]
       properties:
-        id:
-          type: string
-          format: uuid
-        email:
-          type: string
-        status:
+        message:
           type: string
     AdminCreateUserRequest:
       type: object
@@ -2369,6 +2365,7 @@ components:
         password:
           type: string
           minLength: 12
+          description: At least 12 characters with both letters and digits.
     AdminCreateUserResponse:
       type: object
       additionalProperties: false

@@ -310,7 +310,11 @@ async function submitUserDialog(): Promise<void> {
   if (userDialogLoading.value) return;
   userDialogError.value = undefined;
   if (userDialogMode.value === 'create') {
-    if (!newUserEmail.value.trim() || newUserPassword.value.length < 12) {
+    const passwordValid =
+      newUserPassword.value.length >= 12 &&
+      /[A-Za-z]/.test(newUserPassword.value) &&
+      /[0-9]/.test(newUserPassword.value);
+    if (!newUserEmail.value.trim() || !passwordValid) {
       userDialogError.value = t('users.createHint');
       return;
     }

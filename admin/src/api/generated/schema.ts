@@ -236,7 +236,7 @@ export interface paths {
     put?: never;
     /**
      * Self-register an account pending administrator approval
-     * @description Creates a disabled-by-default account. The account stays pending until an administrator enables it; no tokens are issued.
+     * @description Creates a disabled-by-default account. The account stays pending until an administrator enables it; no tokens are issued. Duplicate emails receive the identical 201 response so the endpoint cannot probe account existence.
      */
     post: operations['register'];
     delete?: never;
@@ -1309,17 +1309,16 @@ export interface components {
     RegisterRequest: {
       /** Format: email */
       email: string;
+      /** @description At least 12 characters with both letters and digits. */
       password: string;
     };
     RegisterResponse: {
-      /** Format: uuid */
-      id: string;
-      email: string;
-      status: string;
+      message: string;
     };
     AdminCreateUserRequest: {
       /** Format: email */
       email: string;
+      /** @description At least 12 characters with both letters and digits. */
       password: string;
     };
     AdminCreateUserResponse: {
@@ -2098,7 +2097,6 @@ export interface operations {
       400: components['responses']['InvalidRequest'];
       403: components['responses']['Forbidden'];
       408: components['responses']['RequestTimeout'];
-      409: components['responses']['Conflict'];
       429: components['responses']['RateLimited'];
     };
   };
