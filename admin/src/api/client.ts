@@ -163,6 +163,35 @@ export class ApiClient {
     return this.get(`/api/v1/admin/metrics/trends?days=${days}`);
   }
 
+  getAdminProjectHistory(
+    projectId: string,
+    query?: AdminPageQuery,
+  ): Promise<components['schemas']['AdminHistoryResponse']> {
+    return this.get(
+      `/api/v1/admin/projects/${projectId}/history-metadata${pageQuery(query)}`,
+    );
+  }
+
+  /** Server-generated audit CSV; returned as text for a browser download. */
+  async exportAuditCsv(): Promise<string> {
+    const response = await this.fetcher('/api/v1/admin/audit-events.csv', {
+      credentials: 'include',
+      headers: this.headers(),
+    });
+    if (!response.ok) {
+      const errorBody = (await response.json().catch(() => undefined)) as
+        { code?: string; message?: string; requestId?: string } | undefined;
+      throw new ApiError(
+        response.status,
+        errorBody?.code ?? 'INTERNAL_ERROR',
+        errorBody?.message ??
+          `API request failed with status ${response.status}`,
+        errorBody?.requestId,
+      );
+    }
+    return response.text();
+  }
+
   createAdminRestore(
     projectId: string,
     request: components['schemas']['RestoreRequest'],

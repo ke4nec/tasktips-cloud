@@ -1,0 +1,59 @@
+/*
+ * Fluent theme tokens copied from the desktop client theme
+ * (design/client-theme.css, traced to tasktips/src/styles/theme.css).
+ * Switched by <html data-theme> ("light" / "dark").
+ */
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f3f3f3;
+  --surface: #ffffff;
+  --surface-muted: rgba(0, 0, 0, 0.03);
+  --surface-hover: rgba(0, 0, 0, 0.06);
+  --surface-active: rgba(0, 0, 0, 0.09);
+  --border: rgba(0, 0, 0, 0.1);
+  --text: #1b1b1b;
+  --text-secondary: #5f5f5f;
+  --text-tertiary: #8a8a8a;
+  --accent: #0078d4;
+  --accent-hover: #1a86da;
+  --accent-surface: rgba(0, 120, 212, 0.1);
+  --danger: #c42b1c;
+  --ok: #0f7b0f;
+  --focus-ring: rgba(0, 120, 212, 0.4);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #202020;
+  --surface: #2b2b2b;
+  --surface-muted: rgba(255, 255, 255, 0.04);
+  --surface-hover: rgba(255, 255, 255, 0.07);
+  --surface-active: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #ffffff;
+  --text-secondary: #b4b4b4;
+  --text-tertiary: #8a8a8a;
+  --accent: #4a9eff;
+  --accent-hover: #6cb0ff;
+  --accent-surface: rgba(74, 158, 255, 0.14);
+  --danger: #ff6b5e;
+  --ok: #6ccb5f;
+  --focus-ring: rgba(74, 158, 255, 0.45);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+/* Admin extensions from the design specification. */
+:root {
+  --warning: #8a5700;
+  --radius: 8px;
+  --primary-ink: #ffffff;
+  --caption: #737373;
+}
+
+:root[data-theme='dark'] {
+  --warning: #efbe65;
+  --primary-ink: #10243b;
+  --caption: #b4b4b4;
+}

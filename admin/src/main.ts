@@ -1,3 +1,4 @@
+import './styles/theme.css';
 import './styles/main.css';
 
 import { createPinia } from 'pinia';

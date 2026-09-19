@@ -21,32 +21,27 @@ export const router = createRouter({
     {
       path: '/users',
       name: 'users',
-      component: () => import('./views/AdminDataView.vue'),
-      props: { section: 'users' },
+      component: () => import('./views/UsersView.vue'),
     },
     {
       path: '/projects',
       name: 'projects',
-      component: () => import('./views/AdminDataView.vue'),
-      props: { section: 'projects' },
+      component: () => import('./views/ProjectsView.vue'),
     },
     {
       path: '/devices',
       name: 'devices',
-      component: () => import('./views/AdminDataView.vue'),
-      props: { section: 'devices' },
+      component: () => import('./views/DevicesView.vue'),
     },
     {
       path: '/sync-attempts',
       name: 'sync-attempts',
-      component: () => import('./views/AdminDataView.vue'),
-      props: { section: 'sync' },
+      component: () => import('./views/SyncView.vue'),
     },
     {
       path: '/audit',
       name: 'audit',
-      component: () => import('./views/AdminDataView.vue'),
-      props: { section: 'audit' },
+      component: () => import('./views/AuditView.vue'),
     },
     {
       path: '/settings',
