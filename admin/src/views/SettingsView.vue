@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 
@@ -67,9 +67,6 @@ async function confirmToggle(): Promise<void> {
 }
 
 onMounted(load);
-onBeforeUnmount(() => {
-  saving.value = false;
-});
 </script>
 
 <template>

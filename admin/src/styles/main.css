@@ -1684,6 +1684,23 @@ dialog.drawer[open] {
   height: 16px;
   color: var(--text-secondary);
 }
+.related-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.related-item > strong {
+  font-weight: 400;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.related-item .mono {
+  font-size: 11px;
+}
 .task-status {
   margin: 20px 0 10px;
   display: flex;

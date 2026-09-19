@@ -77,6 +77,7 @@ const xLabels = computed(() => {
 
 <template>
   <svg
+    v-if="points.length"
     class="trend-chart"
     :viewBox="`0 0 ${WIDTH} ${HEIGHT}`"
     role="img"

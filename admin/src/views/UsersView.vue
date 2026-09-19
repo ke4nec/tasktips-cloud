@@ -532,7 +532,7 @@ onBeforeUnmount(() => {
             <div class="skeleton"></div>
           </template>
           <template v-else>
-            <div class="related-link" style="cursor: default">
+            <div class="related-link">
               <AppIcon name="folder" />
               <span>
                 {{ t('users.relatedProjects') }}
@@ -548,15 +548,12 @@ onBeforeUnmount(() => {
             <div
               v-for="project in relatedProjects?.items ?? []"
               :key="project.id"
-              class="detail-grid"
-              style="margin-top: 0; gap: 2px 14px"
+              class="related-item"
             >
-              <strong class="mono" style="font-size: 11px">{{
-                project.name
-              }}</strong>
+              <strong>{{ project.name }}</strong>
               <span class="mono muted">{{ shortId(project.id) }}</span>
             </div>
-            <div class="related-link" style="cursor: default">
+            <div class="related-link">
               <AppIcon name="monitor" />
               <span>
                 {{ t('users.relatedDevices') }}
@@ -572,12 +569,9 @@ onBeforeUnmount(() => {
             <div
               v-for="device in relatedDevices?.items ?? []"
               :key="device.id"
-              class="detail-grid"
-              style="margin-top: 0; gap: 2px 14px"
+              class="related-item"
             >
-              <strong style="font-size: 11px; font-weight: 400">{{
-                device.displayName
-              }}</strong>
+              <strong>{{ device.displayName }}</strong>
               <span class="mono muted">{{ shortId(device.id) }}</span>
             </div>
           </template>

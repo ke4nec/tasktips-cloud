@@ -72,9 +72,14 @@ const filteredOperations = computed(() => {
   });
 });
 
-async function load(refreshTrends = false): Promise<void> {
+async function load(
+  options: { refreshTrends?: boolean; silent?: boolean } = {},
+): Promise<void> {
+  const { refreshTrends = false, silent = false } = options;
   const sequence = ++loadSequence;
-  loading.value = true;
+  // Background polls refresh data in place; only user-initiated loads show
+  // the skeleton and disable the refresh button.
+  if (!silent) loading.value = true;
   error.value = undefined;
   requestId.value = undefined;
   try {
@@ -92,7 +97,7 @@ async function load(refreshTrends = false): Promise<void> {
     if (reason instanceof ApiError && reason.requestId)
       requestId.value = reason.requestId;
   } finally {
-    if (sequence === loadSequence) loading.value = false;
+    if (sequence === loadSequence && !silent) loading.value = false;
   }
   if (refreshTrends) await loadTrends();
 }
@@ -120,7 +125,7 @@ watch([search, filter], () => {
 function updatePolling(): void {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => {
-    if (!document.hidden && !loading.value) void load(false);
+    if (!document.hidden && !loading.value) void load({ silent: true });
   }, 15_000);
 }
 
@@ -157,7 +162,7 @@ function booleanLabel(value: boolean | null | undefined): string {
 
 onMounted(() => {
   updatePolling();
-  void load(true);
+  void load({ refreshTrends: true });
 });
 onBeforeUnmount(() => {
   loadSequence += 1;
@@ -175,7 +180,11 @@ onBeforeUnmount(() => {
         <p>{{ t('description.sync') }}</p>
       </div>
       <div class="heading-actions">
-        <button class="button" :disabled="loading" @click="load(true)">
+        <button
+          class="button"
+          :disabled="loading"
+          @click="load({ refreshTrends: true })"
+        >
           <AppIcon name="refresh" />{{ t('common.refresh') }}
         </button>
       </div>
@@ -185,7 +194,7 @@ onBeforeUnmount(() => {
       v-if="error && !operations.length"
       state="error"
       :request-id="requestId"
-      @retry="load(true)"
+      @retry="load({ refreshTrends: true })"
     />
     <StatePanel v-else-if="loading && !operations.length" state="loading" />
     <template v-else>
