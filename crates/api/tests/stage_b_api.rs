@@ -451,12 +451,24 @@ async fn assert_account_disable(
         .expect("pending user lookup should succeed")
         .expect("pending user should exist")
         .id;
+    // Since self-service registration, pending -> active via enable is the
+    // documented admin approval path, so it succeeds instead of conflicting.
+    let (status, _) = json_request(
+        app,
+        "POST",
+        &format!("/api/v1/admin/users/{pending_user_id}/enable"),
+        Some(&admin.access_token),
+        Some(json!({"reason": "approve the pending account"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // The state machine still guards no-op transitions: approving twice conflicts.
     let (status, error) = json_request(
         app,
         "POST",
         &format!("/api/v1/admin/users/{pending_user_id}/enable"),
         Some(&admin.access_token),
-        Some(json!({"reason": "pending account must be activated by invitation"})),
+        Some(json!({"reason": "approve the pending account again"})),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
