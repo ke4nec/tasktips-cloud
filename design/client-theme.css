@@ -1,0 +1,145 @@
+/* 主题令牌：跟随 <html data-theme> 切换（浅色/深色），参考 design/ Fluent 方案。 */
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f3f3f3;
+  --surface: #ffffff;
+  --surface-muted: rgba(0, 0, 0, 0.03);
+  --surface-hover: rgba(0, 0, 0, 0.06);
+  --surface-active: rgba(0, 0, 0, 0.09);
+  --border: rgba(0, 0, 0, 0.1);
+  --text: #1b1b1b;
+  --text-secondary: #5f5f5f;
+  --text-tertiary: #8a8a8a;
+  --accent: #0078d4;
+  --accent-hover: #1a86da;
+  --accent-surface: rgba(0, 120, 212, 0.1);
+  --danger: #c42b1c;
+  --ok: #0f7b0f;
+  --focus-ring: rgba(0, 120, 212, 0.4);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #202020;
+  --surface: #2b2b2b;
+  --surface-muted: rgba(255, 255, 255, 0.04);
+  --surface-hover: rgba(255, 255, 255, 0.07);
+  --surface-active: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #ffffff;
+  --text-secondary: #b4b4b4;
+  --text-tertiary: #8a8a8a;
+  --accent: #4a9eff;
+  --accent-hover: #6cb0ff;
+  --accent-surface: rgba(74, 158, 255, 0.14);
+  --danger: #ff6b5e;
+  --ok: #6ccb5f;
+  --focus-ring: rgba(74, 158, 255, 0.45);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+/* 优先级标记色 */
+:root {
+  --priority-high: #d13438;
+  --priority-medium: #ca8a04;
+  --priority-low: #0078d4;
+  --priority-none: var(--text-tertiary);
+}
+
+/*
+ * 便签色调令牌（设计文档 7.1/7.2）：
+ * 标题栏/底栏用 --note-bar，正文编辑区用 --note-surface，
+ * 两者同色系但不一致；描边用 --note-border。
+ * 默认（未选色）保持原有 --bg 层次：标题栏为 --bg，正文略深一档。
+ */
+:root {
+  --note-bar: var(--bg);
+  --note-surface: color-mix(in srgb, var(--bg) 96%, #000);
+  --note-border: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* 浅色便签：标题栏色阶比正文深、更饱和，类似便利贴的顶部分层 */
+:root[data-note-color='yellow'] {
+  --note-bar: #f6e361;
+  --note-surface: #fbf1a2;
+}
+:root[data-note-color='orange'] {
+  --note-bar: #f8cb97;
+  --note-surface: #fcdfc0;
+}
+:root[data-note-color='pink'] {
+  --note-bar: #f4b8d2;
+  --note-surface: #f9d8e5;
+}
+:root[data-note-color='purple'] {
+  --note-bar: #d6c2e9;
+  --note-surface: #e5d9f2;
+}
+:root[data-note-color='blue'] {
+  --note-bar: #b0d1f2;
+  --note-surface: #cfe3f8;
+}
+:root[data-note-color='teal'] {
+  --note-bar: #b6dfd6;
+  --note-surface: #d2eae4;
+}
+:root[data-note-color='green'] {
+  --note-bar: #bee0a8;
+  --note-surface: #d7eac8;
+}
+:root[data-note-color='lime'] {
+  --note-bar: #e0eca2;
+  --note-surface: #edf4c4;
+}
+:root[data-note-color='gray'] {
+  --note-bar: #dcdcdc;
+  --note-surface: #e9e9e9;
+}
+
+/* 深色便签：同色系暗色版本，标题栏仍比正文深一档 */
+:root[data-theme='dark'][data-note-color='yellow'] {
+  --note-bar: #393515;
+  --note-surface: #454021;
+}
+:root[data-theme='dark'][data-note-color='orange'] {
+  --note-bar: #3d2c1d;
+  --note-surface: #4a3524;
+}
+:root[data-theme='dark'][data-note-color='pink'] {
+  --note-bar: #3e2631;
+  --note-surface: #4a2e3c;
+}
+:root[data-theme='dark'][data-note-color='purple'] {
+  --note-bar: #322a42;
+  --note-surface: #3d3350;
+}
+:root[data-theme='dark'][data-note-color='blue'] {
+  --note-bar: #213041;
+  --note-surface: #293b50;
+}
+:root[data-theme='dark'][data-note-color='teal'] {
+  --note-bar: #1f3530;
+  --note-surface: #27413c;
+}
+:root[data-theme='dark'][data-note-color='green'] {
+  --note-bar: #263421;
+  --note-surface: #2f412a;
+}
+:root[data-theme='dark'][data-note-color='lime'] {
+  --note-bar: #343a1c;
+  --note-surface: #3f4526;
+}
+:root[data-theme='dark'][data-note-color='gray'] {
+  --note-bar: #2e2e2e;
+  --note-surface: #383838;
+}
+
+/* 有色便签的描边随色阶轻微加深（保持发丝线观感）；默认态保持原边框不变 */
+:root[data-note-color] {
+  --note-border: color-mix(in srgb, var(--note-bar) 88%, #000);
+}
+:root[data-theme='dark'][data-note-color] {
+  --note-border: color-mix(in srgb, var(--note-bar) 70%, #000);
+}

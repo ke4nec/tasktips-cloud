@@ -1,0 +1,631 @@
+{
+  "layoutChecks": [
+    {
+      "page": "overview",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "users",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "projects",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "devices",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "sync",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "audit",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "settings",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "login",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "register",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "specs",
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "overview",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "users",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "projects",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "devices",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "sync",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "audit",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "settings",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "login",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "register",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "specs",
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "overview",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "users",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "projects",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "devices",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "sync",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "audit",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "settings",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "login",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "register",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "specs",
+      "width": 1280,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "overview",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "users",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "projects",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "devices",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "sync",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "audit",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "settings",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "login",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "register",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "specs",
+      "width": 1280,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "overview",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "users",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "projects",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "devices",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "sync",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "audit",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "settings",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "login",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "register",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "specs",
+      "width": 390,
+      "theme": "light",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "overview",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "users",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "projects",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "devices",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "sync",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "audit",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "settings",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "login",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "register",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    },
+    {
+      "page": "specs",
+      "width": 390,
+      "theme": "dark",
+      "overflow": false,
+      "h1": 1,
+      "missingText": false,
+      "brokenImages": false,
+      "emptyButtons": 0
+    }
+  ],
+  "interactionChecks": [
+    "Offline page mounts",
+    "User search filters rows",
+    "Search has an empty result state",
+    "Pending account tab",
+    "Account approval removes pending record",
+    "Pagination advances",
+    "New account appears in list",
+    "Disable requires exact target ID",
+    "Project drawer opens",
+    "Restore requires exact project ID",
+    "Restore is queued and opens task tab",
+    "Restore task details show status, no fake percent",
+    "Registration switch applies confirmation",
+    "Closed registration has a dedicated state",
+    "Registration enters approval state",
+    "Demo login opens overview",
+    "loading state is rendered",
+    "empty state is rendered",
+    "error state is rendered",
+    "One-day trend preserves daily granularity",
+    "Thirty-day trend changes data points"
+  ],
+  "errors": [],
+  "remoteRequests": [],
+  "screenshotDirectory": "screenshots/",
+  "reviewDate": "2026-09-19T11:26:28.898Z"
+}

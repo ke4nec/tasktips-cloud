@@ -1,0 +1,1510 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>TaskTips Cloud · 管理后台设计稿</title>
+    <link rel="icon" href="assets/tasktips.png" />
+    <link rel="stylesheet" href="client-theme.css" />
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="vendor/vue.global.prod.js"></script>
+    <script defer src="vendor/vue-i18n.global.prod.js"></script>
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <div id="app" v-cloak>
+      <div class="design-bar">
+        <span class="design-label"
+          ><span class="design-dot"></span>{{ t('design.label')
+          }}<span class="design-version"> / 01</span></span
+        >
+        <div class="design-controls">
+          <span class="demo-hint">{{ t('design.mock') }}</span>
+          <label class="sr-only" for="preview-state">{{
+            t('design.state')
+          }}</label>
+          <select id="preview-state" v-model="previewState">
+            <option
+              v-for="s in ['normal', 'loading', 'empty', 'error']"
+              :value="s"
+            >
+              {{ t('states.' + s) }}
+            </option>
+          </select>
+          <button
+            class="icon-button"
+            @click="toggleTheme"
+            :aria-label="t('design.theme')"
+            :title="t('design.theme')"
+          >
+            <app-icon :name="theme === 'light' ? 'moon' : 'sun'"></app-icon>
+          </button>
+          <a href="#specs" class="design-link"
+            >{{ t('design.specs') }}<app-icon name="arrow-up-right"></app-icon
+          ></a>
+        </div>
+      </div>
+
+      <div v-if="!isAuth" class="app-shell">
+        <aside class="sidebar">
+          <a href="#overview" class="brand"
+            ><img src="assets/tasktips.png" alt="" /><span
+              ><strong>{{ t('brand.name') }}</strong
+              ><small>{{ t('brand.console') }}</small></span
+            ></a
+          >
+          <div class="workspace-label">
+            <span class="workspace-icon"
+              ><app-icon name="cloud"></app-icon></span
+            ><span
+              >{{ t('brand.workspace')
+              }}<small>{{ t('brand.selfHosted') }}</small></span
+            ><span class="small-dot"></span>
+          </div>
+          <nav :aria-label="t('nav.main')">
+            <template v-for="group in navigation" :key="group.label">
+              <p class="nav-heading">{{ t(group.label) }}</p>
+              <a
+                v-for="item in group.items"
+                :key="item.id"
+                :href="'#' + item.id"
+                :aria-label="t('nav.' + item.id)"
+                class="nav-item"
+                :class="{ active: page === item.id }"
+                :aria-current="page === item.id ? 'page' : undefined"
+                ><app-icon :name="item.icon"></app-icon
+                ><span>{{ t('nav.' + item.id) }}</span></a
+              >
+            </template>
+          </nav>
+          <div class="sidebar-bottom">
+            <div class="privacy-mini">
+              <app-icon name="shield"></app-icon>
+              <div>
+                <strong>{{ t('privacy.title') }}</strong>
+                <p>{{ t('privacy.short') }}</p>
+              </div>
+            </div>
+            <a
+              href="#settings"
+              :aria-label="t('nav.settings')"
+              class="nav-item"
+              :class="{ active: page === 'settings' }"
+              :aria-current="page === 'settings' ? 'page' : undefined"
+              ><app-icon name="settings"></app-icon
+              ><span>{{ t('nav.settings') }}</span></a
+            >
+            <div class="account">
+              <span class="avatar admin-avatar">A</span>
+              <div>
+                <strong>{{ t('brand.admin') }}</strong
+                ><small>{{ t('brand.role') }}</small>
+              </div>
+              <button
+                class="icon-button"
+                :aria-label="t('auth.signOut')"
+                @click="openModal('logout')"
+              >
+                <app-icon name="logout"></app-icon>
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <div class="main-column">
+          <header class="topbar">
+            <div class="breadcrumbs">
+              <span>{{ t('brand.console') }}</span
+              ><span>/</span><strong>{{ t('nav.' + page) }}</strong>
+            </div>
+            <div class="topbar-meta">
+              <span class="live-label"
+                ><span class="small-dot"></span>{{ t('health.live') }}</span
+              ><span class="version">v0.1.0</span>
+            </div>
+          </header>
+          <main id="main" class="main-content">
+            <header class="page-heading">
+              <div>
+                <div class="eyebrow">{{ t('eyebrow.' + page) }}</div>
+                <h1>{{ t('title.' + page) }}</h1>
+                <p>{{ t('description.' + page) }}</p>
+              </div>
+              <div class="heading-actions">
+                <button
+                  v-if="page === 'users'"
+                  class="button primary"
+                  @click="openModal('create')"
+                >
+                  <app-icon name="plus"></app-icon
+                  >{{ t('users.create') }}</button
+                ><button
+                  v-else-if="page === 'audit'"
+                  class="button"
+                  @click="exportAudit"
+                >
+                  <app-icon name="download"></app-icon
+                  >{{ t('audit.export') }}</button
+                ><button
+                  v-else-if="page !== 'specs' && page !== 'settings'"
+                  class="button"
+                  @click="refresh"
+                >
+                  <app-icon name="refresh"></app-icon>{{ t('common.refresh') }}
+                </button>
+              </div>
+            </header>
+
+            <div
+              v-if="previewState !== 'normal'"
+              class="panel state-panel"
+              :aria-busy="previewState === 'loading'"
+            >
+              <template v-if="previewState === 'loading'"
+                ><div class="skeleton skeleton-title"></div>
+                <div v-for="i in 6" class="skeleton"></div>
+                <span class="sr-only">{{ t('states.loading') }}</span></template
+              >
+              <template v-else
+                ><div class="empty-icon">
+                  <app-icon
+                    :name="previewState === 'error' ? 'alert' : 'inbox'"
+                  ></app-icon>
+                </div>
+                <h2>{{ t('states.' + previewState + 'Title') }}</h2>
+                <p>{{ t('states.' + previewState + 'Body') }}</p>
+                <code v-if="previewState === 'error'">req_demo_0919</code
+                ><button class="button" @click="previewState = 'normal'">
+                  {{
+                    t(
+                      previewState === 'error'
+                        ? 'common.retry'
+                        : 'common.reset',
+                    )
+                  }}
+                </button></template
+              >
+            </div>
+
+            <template v-else-if="page === 'overview'">
+              <div class="metrics-grid">
+                <article
+                  v-for="metric in mainMetrics"
+                  class="metric-card panel"
+                >
+                  <div class="metric-label">
+                    {{ t(metric.label)
+                    }}<app-icon :name="metric.icon"></app-icon>
+                  </div>
+                  <strong class="metric-number"
+                    >{{ metric.value
+                    }}<small v-if="metric.unit">{{
+                      metric.unit
+                    }}</small></strong
+                  >
+                  <div class="metric-foot">
+                    <span v-if="metric.extra" class="metric-extra">{{
+                      metric.extra
+                    }}</span
+                    >{{ t(metric.hint) }}
+                  </div>
+                </article>
+              </div>
+              <div class="secondary-metrics panel">
+                <div v-for="metric in secondaryMetrics">
+                  <span>{{ t(metric.label) }}</span
+                  ><strong>{{ metric.value }}</strong
+                  ><span v-if="metric.tag" class="badge warning">{{
+                    t(metric.tag)
+                  }}</span>
+                </div>
+              </div>
+              <div class="overview-middle">
+                <section class="panel trend-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>{{ t('trend.title') }}</h2>
+                      <p>{{ t('trend.subtitle') }}</p>
+                    </div>
+                    <div class="segmented">
+                      <button
+                        v-for="d in [1, 7, 30]"
+                        @click="period = d"
+                        :class="{ selected: period === d }"
+                        :aria-pressed="period === d"
+                      >
+                        {{ t('trend.days', { n: d }) }}
+                      </button>
+                    </div>
+                  </div>
+                  <div class="trend-summary">
+                    <strong>{{ trendStats.rate }}<small>%</small></strong
+                    ><span>{{ t('trend.rate') }}</span
+                    ><span class="trend-total">{{
+                      t('trend.total', { n: number(trendStats.attempts) })
+                    }}</span>
+                  </div>
+                  <div class="chart-wrap">
+                    <svg
+                      class="trend-chart"
+                      viewBox="0 0 760 186"
+                      role="img"
+                      :aria-label="t('trend.chartLabel', { n: period })"
+                    >
+                      <defs>
+                        <linearGradient
+                          id="chart-fill"
+                          x1="0"
+                          y1="0"
+                          x2="0"
+                          y2="1"
+                        >
+                          <stop
+                            offset="0%"
+                            stop-color="var(--accent)"
+                            stop-opacity=".19"
+                          />
+                          <stop
+                            offset="100%"
+                            stop-color="var(--accent)"
+                            stop-opacity=".01"
+                          />
+                        </linearGradient>
+                      </defs>
+                      <g v-for="(label, i) in ['2,400', '1,600', '800', '0']">
+                        <line
+                          x1="44"
+                          x2="746"
+                          :y1="18 + i * 44"
+                          :y2="18 + i * 44"
+                          class="chart-grid"
+                        />
+                        <text x="0" :y="22 + i * 44" class="chart-label">
+                          {{ label }}
+                        </text>
+                      </g>
+                      <path :d="chartArea" fill="url(#chart-fill)" />
+                      <path
+                        :d="chartLine"
+                        fill="none"
+                        stroke="var(--accent)"
+                        stroke-width="2.4"
+                        stroke-linejoin="round"
+                        stroke-linecap="round"
+                      />
+                      <circle
+                        v-for="(point, i) in chartPoints"
+                        :cx="point.x"
+                        :cy="point.y"
+                        r="3"
+                        fill="var(--surface)"
+                        stroke="var(--accent)"
+                        stroke-width="1.8"
+                      >
+                        <title>
+                          {{ visibleTrends[i].day }} ·
+                          {{ visibleTrends[i].succeeded }}
+                        </title>
+                      </circle>
+                      <g v-for="(point, i) in chartPoints">
+                        <text
+                          v-if="
+                            i === 0 ||
+                            i === chartPoints.length - 1 ||
+                            (chartPoints.length > 4 &&
+                              i % Math.ceil(chartPoints.length / 5) === 0)
+                          "
+                          :x="point.x"
+                          y="178"
+                          text-anchor="middle"
+                          class="chart-label"
+                        >
+                          {{ visibleTrends[i].day.slice(5).replace('-', '/') }}
+                        </text>
+                      </g>
+                    </svg>
+                  </div>
+                  <div class="chart-footer">
+                    <span
+                      ><i class="legend-dot"></i
+                      >{{ t('trend.succeeded') }}</span
+                    ><span
+                      >{{ t('trend.conflicts')
+                      }}<b>{{ number(trendStats.conflicts) }}</b></span
+                    ><a href="#sync"
+                      >{{ t('trend.details')
+                      }}<app-icon name="arrow-right"></app-icon
+                    ></a>
+                  </div>
+                </section>
+                <section class="panel health-panel">
+                  <div class="panel-heading">
+                    <h2>{{ t('health.title') }}</h2>
+                    <app-icon name="activity"></app-icon>
+                  </div>
+                  <div class="health-summary">
+                    <div class="health-check">
+                      <app-icon name="check"></app-icon>
+                    </div>
+                    <div>
+                      <strong>{{ t('health.ready') }}</strong
+                      ><small>{{ t('health.checked') }}</small>
+                    </div>
+                  </div>
+                  <div class="health-row" v-for="item in healthItems">
+                    <span>{{ t(item.label) }}</span
+                    ><span class="text-success"
+                      ><span class="small-dot"></span>{{ t(item.status) }}</span
+                    >
+                  </div>
+                  <div class="health-note">
+                    <app-icon name="shield"></app-icon
+                    ><span>{{ t('privacy.health') }}</span>
+                  </div>
+                </section>
+              </div>
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>{{ t('operations.recent') }}</h2>
+                    <p>{{ t('operations.subtitle') }}</p>
+                  </div>
+                  <a href="#sync" class="text-link"
+                    >{{ t('common.viewAll')
+                    }}<app-icon name="arrow-right"></app-icon
+                  ></a>
+                </div>
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>{{ t('col.operation') }}</th>
+                        <th>{{ t('col.project') }}</th>
+                        <th>{{ t('col.status') }}</th>
+                        <th class="numeric">{{ t('col.items') }}</th>
+                        <th class="numeric">{{ t('col.latency') }}</th>
+                        <th>{{ t('col.time') }}</th>
+                        <th>
+                          <span class="sr-only">{{ t('common.details') }}</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="row in operations.slice(0, 4)">
+                        <td>
+                          <span class="operation-cell"
+                            ><app-icon
+                              :name="
+                                row.operation === 'restore' ? 'history' : 'sync'
+                              "
+                            ></app-icon
+                            >{{ t('operation.' + row.operation) }}</span
+                          >
+                        </td>
+                        <td class="mono">{{ shortId(row.projectId) }}</td>
+                        <td>
+                          <status-badge :value="row.status"></status-badge>
+                        </td>
+                        <td class="numeric">{{ row.itemCount ?? '—' }}</td>
+                        <td class="numeric">
+                          {{
+                            row.latencyMs === null ? '—' : row.latencyMs + ' ms'
+                          }}
+                        </td>
+                        <td class="muted">{{ row.time }}</td>
+                        <td>
+                          <button
+                            class="icon-button"
+                            :aria-label="t('common.details')"
+                            @click="showDrawer('operation', row)"
+                          >
+                            <app-icon name="chevron-right"></app-icon>
+                          </button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </template>
+
+            <template
+              v-else-if="
+                ['users', 'projects', 'devices', 'sync', 'audit'].includes(page)
+              "
+            >
+              <div v-if="page === 'sync'" class="diagnostic-summary">
+                <div class="panel mini-stat">
+                  <span>{{ t('trend.rate') }}</span
+                  ><strong>{{ trendStats.rate }}<small>%</small></strong
+                  ><span>{{ t('sync.window') }}</span>
+                </div>
+                <div class="panel mini-stat">
+                  <span>{{ t('trend.conflicts') }}</span
+                  ><strong>{{ number(trendStats.conflicts) }}</strong
+                  ><span>{{ t('sync.window') }}</span>
+                </div>
+                <div class="panel mini-stat">
+                  <span>{{ t('sync.p50') }}</span
+                  ><strong>42<small>ms</small></strong
+                  ><span>{{ t('sync.latestDay') }}</span>
+                </div>
+                <div class="panel mini-stat">
+                  <span>{{ t('sync.p99') }}</span
+                  ><strong>186<small>ms</small></strong
+                  ><span>{{ t('sync.latestDay') }}</span>
+                </div>
+              </div>
+              <section class="panel list-panel">
+                <div class="list-tabs" v-if="page === 'users'">
+                  <button
+                    v-for="s in ['all', 'pending', 'active', 'disabled']"
+                    :class="{ active: filter === s }"
+                    @click="setFilter(s)"
+                  >
+                    {{ t('filter.' + s)
+                    }}<span v-if="s === 'pending'">{{
+                      users.filter((u) => u.status === 'pending').length
+                    }}</span>
+                  </button>
+                </div>
+                <div class="list-tabs" v-if="page === 'sync'">
+                  <button
+                    v-for="s in ['all', 'sync', 'restore']"
+                    :class="{ active: filter === s }"
+                    @click="setFilter(s)"
+                  >
+                    {{ t('filter.' + s) }}</button
+                  ><span class="polling"
+                    ><span class="small-dot"></span
+                    >{{ t('sync.polling') }}</span
+                  >
+                </div>
+                <div class="table-toolbar">
+                  <label class="search-field"
+                    ><app-icon name="search"></app-icon
+                    ><input
+                      v-model="search"
+                      :placeholder="t('search.' + page)"
+                      :aria-label="t('search.' + page)" /></label
+                  ><label
+                    v-if="page === 'projects' || page === 'devices'"
+                    class="select-filter"
+                    ><span class="sr-only">{{ t('col.status') }}</span
+                    ><select v-model="filter">
+                      <option value="all">{{ t('filter.allStatus') }}</option>
+                      <option
+                        v-for="s in page === 'projects'
+                          ? ['active', 'maintenance', 'disabled']
+                          : ['active', 'revoked']"
+                        :value="s"
+                      >
+                        {{ t('status.' + s) }}
+                      </option>
+                    </select></label
+                  ><span class="toolbar-note">{{
+                    t(
+                      page === 'projects'
+                        ? 'common.mockSearch'
+                        : 'common.pageFilter',
+                    )
+                  }}</span>
+                </div>
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th
+                          v-for="column in tableColumns"
+                          :class="{ numeric: column.numeric }"
+                        >
+                          {{ t('col.' + column.key) }}
+                        </th>
+                        <th>
+                          <span class="sr-only">{{ t('col.actions') }}</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="row in pagedRows" :key="row.id">
+                        <template v-if="page === 'users'"
+                          ><td>
+                            <button
+                              class="identity-button"
+                              @click="showDrawer('user', row)"
+                            >
+                              <span class="avatar" :class="row.tint">{{
+                                row.email.slice(0, 1).toUpperCase()
+                              }}</span
+                              ><span
+                                ><strong>{{ row.email }}</strong
+                                ><small class="mono">{{
+                                  shortId(row.id)
+                                }}</small></span
+                              >
+                            </button>
+                          </td>
+                          <td>{{ t('role.' + row.role) }}</td>
+                          <td>
+                            <status-badge :value="row.status"></status-badge>
+                          </td>
+                          <td class="muted">{{ row.createdAt }}</td>
+                          <td class="muted">
+                            {{ row.lastLoginAt || t('common.never') }}
+                          </td>
+                          <td class="row-actions">
+                            <button
+                              v-if="row.role !== 'system_admin'"
+                              class="text-button"
+                              :class="{
+                                'danger-text': row.status === 'active',
+                              }"
+                              @click="
+                                openModal(
+                                  row.status === 'active'
+                                    ? 'disable'
+                                    : 'enable',
+                                  row,
+                                )
+                              "
+                            >
+                              {{
+                                t(
+                                  row.status === 'pending'
+                                    ? 'users.approve'
+                                    : row.status === 'active'
+                                      ? 'users.disable'
+                                      : 'users.enable',
+                                )
+                              }}</button
+                            ><button
+                              v-else
+                              class="text-button"
+                              @click="showDrawer('user', row)"
+                            >
+                              {{ t('common.details') }}
+                            </button>
+                          </td></template
+                        >
+                        <template v-else-if="page === 'projects'"
+                          ><td>
+                            <button
+                              class="identity-button"
+                              @click="showDrawer('project', row)"
+                            >
+                              <span class="project-icon"
+                                ><app-icon name="folder"></app-icon></span
+                              ><span
+                                ><strong>{{ row.name }}</strong
+                                ><small class="mono">{{
+                                  shortId(row.id)
+                                }}</small></span
+                              >
+                            </button>
+                          </td>
+                          <td class="mono">{{ shortId(row.ownerUserId) }}</td>
+                          <td>
+                            <status-badge :value="row.status"></status-badge>
+                          </td>
+                          <td class="numeric mono">{{ row.generation }}</td>
+                          <td class="numeric mono">
+                            {{ number(row.changeSequence) }}
+                          </td>
+                          <td class="muted">{{ row.updatedAt }}</td>
+                          <td>
+                            <button
+                              class="text-button"
+                              @click="showDrawer('project', row)"
+                            >
+                              {{ t('common.manage')
+                              }}<app-icon name="chevron-right"></app-icon>
+                            </button></td
+                        ></template>
+                        <template v-else-if="page === 'devices'"
+                          ><td>
+                            <button
+                              class="identity-button"
+                              @click="showDrawer('device', row)"
+                            >
+                              <span class="project-icon neutral"
+                                ><app-icon name="monitor"></app-icon></span
+                              ><span
+                                ><strong>{{ row.displayName }}</strong
+                                ><small class="mono">{{
+                                  shortId(row.id)
+                                }}</small></span
+                              >
+                            </button>
+                          </td>
+                          <td class="mono">{{ shortId(row.ownerUserId) }}</td>
+                          <td>{{ row.platform }}</td>
+                          <td class="mono">{{ row.appVersion }}</td>
+                          <td>
+                            <status-badge :value="row.status"></status-badge>
+                          </td>
+                          <td class="muted">{{ row.lastSeenAt }}</td>
+                          <td>
+                            <button
+                              class="text-button"
+                              @click="showDrawer('device', row)"
+                            >
+                              {{ t('common.details') }}
+                            </button>
+                          </td></template
+                        >
+                        <template v-else-if="page === 'sync'"
+                          ><td>
+                            <span class="operation-cell"
+                              ><app-icon
+                                :name="
+                                  row.operation === 'restore'
+                                    ? 'history'
+                                    : 'sync'
+                                "
+                              ></app-icon
+                              >{{ t('operation.' + row.operation) }}</span
+                            ><small class="cell-sub mono">{{
+                              shortId(row.id)
+                            }}</small>
+                          </td>
+                          <td class="mono">{{ shortId(row.projectId) }}</td>
+                          <td>
+                            <status-badge :value="row.status"></status-badge>
+                          </td>
+                          <td class="numeric">{{ row.itemCount ?? '—' }}</td>
+                          <td class="numeric">
+                            {{
+                              row.latencyMs === null
+                                ? '—'
+                                : row.latencyMs + ' ms'
+                            }}
+                          </td>
+                          <td>
+                            <code
+                              class="error-code"
+                              :class="{ 'danger-text': row.errorCode }"
+                              >{{ row.errorCode || '—' }}</code
+                            >
+                          </td>
+                          <td class="muted">{{ row.time }}</td>
+                          <td>
+                            <button
+                              class="icon-button"
+                              :aria-label="t('common.details')"
+                              @click="showDrawer('operation', row)"
+                            >
+                              <app-icon name="chevron-right"></app-icon>
+                            </button></td
+                        ></template>
+                        <template v-else
+                          ><td>
+                            <span class="event-title">{{
+                              t('auditAction.' + row.action)
+                            }}</span
+                            ><small class="cell-sub mono">{{
+                              row.action
+                            }}</small>
+                          </td>
+                          <td class="mono">{{ shortId(row.actorUserId) }}</td>
+                          <td class="mono">{{ shortId(row.subjectUserId) }}</td>
+                          <td class="mono">{{ row.requestId }}</td>
+                          <td class="muted">{{ row.createdAt }}</td>
+                          <td>
+                            <button
+                              class="text-button"
+                              @click="showDrawer('audit', row)"
+                            >
+                              {{ t('common.details') }}
+                            </button>
+                          </td></template
+                        >
+                      </tr>
+                      <tr v-if="!filteredRows.length">
+                        <td :colspan="tableColumns.length + 1">
+                          <div class="inline-empty">
+                            <app-icon name="search"></app-icon
+                            ><strong>{{ t('states.noMatch') }}</strong
+                            ><button
+                              class="text-button"
+                              @click="
+                                search = '';
+                                setFilter('all');
+                              "
+                            >
+                              {{ t('common.reset') }}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <footer class="table-footer">
+                  <span>{{
+                    t('common.sampleRows', { n: filteredRows.length })
+                  }}</span>
+                  <div class="pagination">
+                    <button
+                      class="icon-button"
+                      :disabled="pageNumber === 1"
+                      :aria-label="t('common.previous')"
+                      @click="pageNumber--"
+                    >
+                      <app-icon name="chevron-left"></app-icon></button
+                    ><span>{{ t('common.page', { n: pageNumber }) }}</span
+                    ><button
+                      class="icon-button"
+                      :disabled="pageNumber * pageSize >= filteredRows.length"
+                      :aria-label="t('common.next')"
+                      @click="pageNumber++"
+                    >
+                      <app-icon name="chevron-right"></app-icon>
+                    </button>
+                  </div>
+                </footer>
+              </section>
+              <div v-if="page === 'projects'" class="page-note">
+                <app-icon name="history"></app-icon
+                ><span>{{ t('projects.note') }}</span>
+              </div>
+              <div v-if="page === 'audit'" class="page-note">
+                <app-icon name="shield"></app-icon
+                ><span>{{ t('audit.note') }}</span>
+              </div>
+              <section v-if="page === 'sync'" class="panel daily-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>{{ t('sync.daily') }}</h2>
+                    <p>{{ t('sync.dailyHint') }}</p>
+                  </div>
+                  <div class="segmented">
+                    <button
+                      v-for="d in [1, 7, 30]"
+                      @click="period = d"
+                      :class="{ selected: period === d }"
+                    >
+                      {{ t('trend.days', { n: d }) }}
+                    </button>
+                  </div>
+                </div>
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>{{ t('col.date') }}</th>
+                        <th
+                          v-for="c in [
+                            'attempts',
+                            'succeeded',
+                            'conflicts',
+                            'p50',
+                            'p99',
+                          ]"
+                          class="numeric"
+                        >
+                          {{ t('col.' + c) }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="row in visibleTrends.slice(-3).reverse()">
+                        <td>{{ row.day }}</td>
+                        <td class="numeric">{{ number(row.attempts) }}</td>
+                        <td class="numeric">{{ number(row.succeeded) }}</td>
+                        <td class="numeric">{{ row.conflicts }}</td>
+                        <td class="numeric">{{ row.p50LatencyMs }} ms</td>
+                        <td class="numeric">{{ row.p99LatencyMs }} ms</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </template>
+
+            <template v-else-if="page === 'settings'">
+              <div class="settings-layout">
+                <div class="settings-main">
+                  <section class="panel settings-panel">
+                    <h2>
+                      <app-icon name="users"></app-icon
+                      >{{ t('settings.access') }}
+                    </h2>
+                    <div class="setting-row">
+                      <div>
+                        <strong>{{ t('settings.registration') }}</strong>
+                        <p>{{ t('settings.registrationHint') }}</p>
+                      </div>
+                      <button
+                        class="switch"
+                        :class="{ on: registration }"
+                        role="switch"
+                        :aria-checked="registration"
+                        :aria-label="t('settings.registration')"
+                        @click="openModal('registration')"
+                      >
+                        <span></span>
+                      </button>
+                    </div>
+                    <div class="panel-footnote">
+                      <app-icon name="info"></app-icon
+                      >{{ t('settings.approval') }}
+                    </div>
+                  </section>
+                  <section class="panel settings-panel">
+                    <h2>
+                      <app-icon name="sun"></app-icon
+                      >{{ t('settings.appearance') }}
+                    </h2>
+                    <div class="setting-row">
+                      <div>
+                        <strong>{{ t('settings.theme') }}</strong>
+                        <p>{{ t('settings.themeHint') }}</p>
+                      </div>
+                      <div class="segmented">
+                        <button
+                          v-for="mode in ['light', 'dark', 'system']"
+                          :class="{ selected: themeMode === mode }"
+                          @click="setTheme(mode)"
+                        >
+                          <app-icon
+                            :name="
+                              mode === 'light'
+                                ? 'sun'
+                                : mode === 'dark'
+                                  ? 'moon'
+                                  : 'monitor'
+                            "
+                          ></app-icon
+                          >{{ t('settings.' + mode) }}
+                        </button>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div>
+                        <strong>{{ t('settings.language') }}</strong>
+                        <p>{{ t('settings.languageHint') }}</p>
+                      </div>
+                      <span>{{ t('settings.zh') }}</span>
+                    </div>
+                  </section>
+                  <section class="panel settings-panel">
+                    <h2>
+                      <app-icon name="cloud"></app-icon
+                      >{{ t('settings.about') }}
+                    </h2>
+                    <div class="setting-row">
+                      <span>{{ t('settings.version') }}</span
+                      ><code>0.1.0</code>
+                    </div>
+                    <div class="setting-row">
+                      <span>{{ t('settings.mode') }}</span
+                      ><span>{{ t('brand.selfHosted') }}</span>
+                    </div>
+                  </section>
+                </div>
+                <aside class="settings-aside">
+                  <span class="aside-icon"
+                    ><app-icon name="shield"></app-icon
+                  ></span>
+                  <h3>{{ t('privacy.title') }}</h3>
+                  <p>{{ t('privacy.settings') }}</p>
+                  <a href="#audit"
+                    >{{ t('settings.audit')
+                    }}<app-icon name="arrow-right"></app-icon
+                  ></a>
+                </aside>
+              </div>
+            </template>
+
+            <template v-else-if="page === 'specs'">
+              <div class="spec-intro panel">
+                <img src="assets/tasktips.png" alt="" />
+                <div>
+                  <h2>{{ t('specs.family') }}</h2>
+                  <p>{{ t('specs.familyHint') }}</p>
+                </div>
+                <span class="badge info">Fluent</span>
+              </div>
+              <section class="panel spec-section">
+                <h2>{{ t('specs.palette') }}</h2>
+                <div class="swatch-grid">
+                  <div v-for="color in palette">
+                    <div
+                      class="swatch"
+                      :style="{ background: 'var(' + color.token + ')' }"
+                    ></div>
+                    <strong>{{ t('color.' + color.name) }}</strong
+                    ><code>{{
+                      theme === 'dark' ? color.dark : color.light
+                    }}</code>
+                  </div>
+                </div>
+              </section>
+              <div class="spec-grid">
+                <section class="panel spec-section">
+                  <h2>{{ t('specs.type') }}</h2>
+                  <div class="type-sample">
+                    <span>28 / 600</span
+                    ><strong class="sample-h1">{{
+                      t('title.overview')
+                    }}</strong>
+                  </div>
+                  <div class="type-sample">
+                    <span>16 / 600</span><strong>{{ t('trend.title') }}</strong>
+                  </div>
+                  <div class="type-sample">
+                    <span>13 / 400</span><span>{{ t('specs.body') }}</span>
+                  </div>
+                  <div class="type-sample">
+                    <span>12 / 400</span><code>01fe9c74 · 8,426 · 42 ms</code>
+                  </div>
+                </section>
+                <section class="panel spec-section">
+                  <h2>{{ t('specs.components') }}</h2>
+                  <div class="component-line">
+                    <button class="button primary" @click="openModal('create')">
+                      <app-icon name="plus"></app-icon
+                      >{{ t('users.create') }}</button
+                    ><button class="button" @click="refresh">
+                      {{ t('common.refresh') }}</button
+                    ><button class="button" disabled>
+                      {{ t('common.disabled') }}
+                    </button>
+                  </div>
+                  <div class="component-line">
+                    <status-badge
+                      v-for="s in ['active', 'pending', 'failed', 'disabled']"
+                      :value="s"
+                    ></status-badge>
+                  </div>
+                  <div class="component-line">
+                    <span class="avatar blue">L</span
+                    ><span class="avatar mint">Y</span
+                    ><span class="avatar lavender">Z</span
+                    ><span>{{ t('specs.radius') }}</span>
+                  </div>
+                </section>
+              </div>
+              <section class="panel spec-section">
+                <h2>{{ t('specs.pages') }}</h2>
+                <div class="page-links">
+                  <a
+                    v-for="id in [
+                      'overview',
+                      'users',
+                      'projects',
+                      'devices',
+                      'sync',
+                      'audit',
+                      'settings',
+                      'login',
+                      'register',
+                    ]"
+                    :href="'#' + id"
+                    >{{ t('nav.' + id)
+                    }}<app-icon name="arrow-up-right"></app-icon
+                  ></a>
+                </div>
+                <p class="muted">{{ t('specs.stateHint') }}</p>
+              </section>
+            </template>
+            <footer class="page-bottom">
+              <span
+                >{{ t('brand.name') }}<span class="footer-dot">·</span
+                >{{ t('privacy.footer') }}</span
+              ><span>{{ t('common.updated', { time: updatedAt }) }}</span>
+            </footer>
+          </main>
+        </div>
+      </div>
+
+      <main v-else class="auth-page">
+        <a href="#overview" class="auth-brand brand"
+          ><img src="assets/tasktips.png" alt="" /><strong>{{
+            t('brand.name')
+          }}</strong></a
+        >
+        <div class="auth-layout">
+          <section class="auth-story">
+            <span class="eyebrow">{{ t('auth.eyebrow') }}</span>
+            <h1>
+              {{ t('auth.hero1') }}<br /><span>{{ t('auth.hero2') }}</span>
+            </h1>
+            <p>{{ t('auth.heroDescription') }}</p>
+            <div class="auth-illustration" aria-hidden="true">
+              <div class="orbit orbit-one"></div>
+              <div class="orbit orbit-two"></div>
+              <div class="illustration-center">
+                <img src="assets/tasktips.png" alt="" />
+              </div>
+              <div class="floating-node node-desktop">
+                <app-icon name="monitor"></app-icon><span>Windows</span>
+              </div>
+              <div class="floating-node node-laptop">
+                <app-icon name="monitor"></app-icon><span>macOS</span>
+              </div>
+              <div class="floating-node node-cloud">
+                <app-icon name="cloud"></app-icon
+                ><app-icon name="check"></app-icon>
+              </div>
+              <i class="orbit-dot dot-one"></i><i class="orbit-dot dot-two"></i>
+            </div>
+            <div class="auth-trust">
+              <app-icon name="shield"></app-icon
+              ><span>{{ t('auth.trust') }}</span>
+            </div>
+          </section>
+          <section class="auth-card panel">
+            <template v-if="registered"
+              ><div class="success-mark">
+                <app-icon name="check"></app-icon>
+              </div>
+              <h2>{{ t('auth.registered') }}</h2>
+              <p>{{ t('auth.registeredHint') }}</p>
+              <button
+                class="button primary full-width"
+                @click="
+                  go('login');
+                  registered = false;
+                "
+              >
+                {{ t('auth.backToLogin') }}
+              </button></template
+            ><template v-else-if="page === 'register' && !registration"
+              ><div class="empty-icon"><app-icon name="lock"></app-icon></div>
+              <h2>{{ t('auth.closed') }}</h2>
+              <p>{{ t('auth.closedHint') }}</p>
+              <a href="#login" class="button full-width">{{
+                t('auth.backToLogin')
+              }}</a></template
+            ><template v-else
+              ><div class="auth-card-top">
+                <span class="auth-kicker">{{
+                  t(page === 'login' ? 'auth.adminAccess' : 'auth.join')
+                }}</span
+                ><app-icon name="lock"></app-icon>
+              </div>
+              <h2>
+                {{
+                  t(page === 'login' ? 'auth.welcome' : 'auth.createAccount')
+                }}
+              </h2>
+              <p>
+                {{
+                  t(page === 'login' ? 'auth.loginHint' : 'auth.registerHint')
+                }}
+              </p>
+              <div v-if="previewState === 'error'" class="notice danger">
+                {{ t('auth.failed') }}
+              </div>
+              <form @submit.prevent="submitAuth">
+                <label
+                  >{{ t('auth.email')
+                  }}<input
+                    v-model="authEmail"
+                    type="email"
+                    :placeholder="t('auth.emailPlaceholder')"
+                    autocomplete="off"
+                    required /></label
+                ><label
+                  >{{ t('auth.password') }}
+                  <div class="password-field">
+                    <input
+                      v-model="authPassword"
+                      :type="showPassword ? 'text' : 'password'"
+                      :placeholder="t('auth.passwordPlaceholder')"
+                      :minlength="page === 'register' ? 12 : 1"
+                      autocomplete="off"
+                      required
+                    /><button
+                      type="button"
+                      class="icon-button"
+                      :aria-label="t('auth.showPassword')"
+                      @click="showPassword = !showPassword"
+                    >
+                      <app-icon name="eye"></app-icon>
+                    </button></div></label
+                ><template v-if="page === 'register'"
+                  ><small class="field-hint">{{ t('auth.passwordHint') }}</small
+                  ><label
+                    >{{ t('auth.confirmPassword')
+                    }}<input
+                      v-model="authConfirm"
+                      type="password"
+                      autocomplete="off"
+                      required /></label
+                ></template>
+                <div v-if="authError" class="notice danger" role="alert">
+                  {{ authError }}
+                </div>
+                <button
+                  class="button primary full-width auth-submit"
+                  :disabled="previewState === 'loading'"
+                >
+                  {{
+                    t(
+                      previewState === 'loading'
+                        ? 'states.loading'
+                        : page === 'login'
+                          ? 'auth.signIn'
+                          : 'auth.submitRegister',
+                    )
+                  }}<app-icon name="arrow-right"></app-icon>
+                </button>
+              </form>
+              <div class="auth-switch">
+                <span>{{
+                  t(page === 'login' ? 'auth.noAccount' : 'auth.hasAccount')
+                }}</span
+                ><a :href="page === 'login' ? '#register' : '#login'">{{
+                  t(page === 'login' ? 'auth.register' : 'auth.signIn')
+                }}</a>
+              </div>
+              <div class="auth-disclaimer">
+                <app-icon name="info"></app-icon>{{ t('auth.demo') }}
+              </div></template
+            >
+          </section>
+        </div>
+        <footer class="auth-footer">
+          <span>{{ t('brand.name') }} · v0.1.0</span
+          ><span>{{ t('privacy.footer') }}</span>
+        </footer>
+      </main>
+
+      <dialog
+        ref="drawerDialog"
+        class="drawer"
+        @close="drawer = null"
+        @click="dismissBackdrop($event, 'drawer')"
+      >
+        <template v-if="drawer"
+          ><header class="drawer-header">
+            <div>
+              <span class="eyebrow">{{ t('drawer.' + drawer.type) }}</span>
+              <h2>{{ drawerTitle }}</h2>
+            </div>
+            <button
+              class="icon-button"
+              :aria-label="t('common.close')"
+              @click="closeDrawer"
+            >
+              <app-icon name="close"></app-icon>
+            </button>
+          </header>
+          <div class="drawer-body">
+            <status-badge
+              v-if="drawer.row.status"
+              :value="drawer.row.status"
+            ></status-badge>
+            <div class="detail-grid">
+              <template v-for="detail in drawerDetails"
+                ><span>{{ t(detail.label) }}</span
+                ><strong :class="{ mono: detail.mono }">{{
+                  detail.value ?? '—'
+                }}</strong></template
+              >
+            </div>
+            <template v-if="drawer.type === 'project'"
+              ><div class="section-divider"></div>
+              <h3>{{ t('projects.history') }}</h3>
+              <p class="muted">{{ t('projects.historyHint') }}</p>
+              <ol class="history-list">
+                <li v-for="(item, i) in [0, 1, 2]">
+                  <span class="timeline-dot"></span>
+                  <div>
+                    <strong
+                      >{{
+                        t(i === 2 ? 'projects.tombstone' : 'projects.revision')
+                      }}<code> r{{ 12 - i }}</code></strong
+                    ><small
+                      >{{ t('col.sequence') }}
+                      {{ number(drawer.row.changeSequence - i) }} · 09/19 10:{{
+                        24 - i * 3
+                      }}</small
+                    ><code class="muted"
+                      >{{ shortId(drawer.row.id) }} / obj-{{ 801 - i }}</code
+                    >
+                  </div>
+                </li>
+              </ol>
+              <div class="notice info">
+                <app-icon name="shield"></app-icon
+                >{{ t('projects.metadataOnly') }}
+              </div></template
+            >
+            <template v-if="drawer.type === 'user'"
+              ><div class="section-divider"></div>
+              <h3>{{ t('users.related') }}</h3>
+              <p class="muted">{{ t('users.relatedHint') }}</p>
+              <button
+                class="related-link"
+                @click="goRelated('projects', drawer.row.id)"
+              >
+                <app-icon name="folder"></app-icon
+                ><span>{{ t('nav.projects') }}</span
+                ><app-icon name="chevron-right"></app-icon></button
+              ><button
+                class="related-link"
+                @click="goRelated('devices', drawer.row.id)"
+              >
+                <app-icon name="monitor"></app-icon
+                ><span>{{ t('nav.devices') }}</span
+                ><app-icon name="chevron-right"></app-icon></button
+            ></template>
+            <template
+              v-if="
+                drawer.type === 'operation' &&
+                drawer.row.operation === 'restore'
+              "
+              ><div class="section-divider"></div>
+              <h3>{{ t('restore.taskStatus') }}</h3>
+              <div class="task-status">
+                <app-icon
+                  :name="
+                    drawer.row.status === 'succeeded'
+                      ? 'check'
+                      : drawer.row.status === 'failed'
+                        ? 'alert'
+                        : 'clock'
+                  "
+                ></app-icon
+                ><span>{{ t('status.' + drawer.row.status) }}</span>
+              </div>
+              <p class="muted">{{ t('restore.taskHint') }}</p>
+              <div v-if="drawer.row.status === 'failed'" class="notice warning">
+                {{ t('restore.failure') }}
+              </div></template
+            >
+          </div>
+          <footer class="drawer-footer">
+            <button class="button" @click="closeDrawer">
+              {{ t('common.close') }}</button
+            ><button
+              v-if="drawer.type === 'project'"
+              class="button primary"
+              :disabled="drawer.row.status !== 'active'"
+              @click="startRestore(drawer.row)"
+            >
+              <app-icon name="history"></app-icon>{{ t('restore.start') }}
+            </button>
+          </footer></template
+        >
+      </dialog>
+
+      <dialog
+        ref="modalDialog"
+        class="modal"
+        @close="modal = null"
+        @click="dismissBackdrop($event, 'modal')"
+      >
+        <template v-if="modal"
+          ><header class="modal-header">
+            <div
+              class="modal-heading-icon"
+              :class="{ destructive: modal.type === 'disable' }"
+            >
+              <app-icon
+                :name="
+                  modal.type === 'restore'
+                    ? 'history'
+                    : modal.type === 'create'
+                      ? 'user-plus'
+                      : 'shield'
+                "
+              ></app-icon>
+            </div>
+            <button
+              class="icon-button"
+              :aria-label="t('common.close')"
+              @click="closeModal"
+            >
+              <app-icon name="close"></app-icon>
+            </button>
+          </header>
+          <h2>{{ t('modal.' + modal.type) }}</h2>
+          <p class="muted modal-description">
+            {{ t('modalHint.' + modal.type) }}
+          </p>
+          <form @submit.prevent="submitModal">
+            <template v-if="modal.type === 'restore'"
+              ><ol class="steps">
+                <li :class="{ current: restoreStep === 1 }">
+                  <span>1</span>{{ t('restore.target') }}
+                </li>
+                <li :class="{ current: restoreStep === 2 }">
+                  <span>2</span>{{ t('restore.review') }}
+                </li>
+              </ol>
+              <div class="target-card">
+                <app-icon name="folder"></app-icon>
+                <div>
+                  <strong>{{ modal.row.name }}</strong
+                  ><small class="mono">{{ modal.row.id }}</small>
+                </div>
+              </div>
+              <template v-if="restoreStep === 1"
+                ><label
+                  >{{ t('restore.type')
+                  }}<select v-model="form.targetType">
+                    <option value="sequence">
+                      {{ t('restore.sequence') }}
+                    </option>
+                    <option value="snapshot">
+                      {{ t('restore.snapshot') }}
+                    </option>
+                  </select></label
+                ><label v-if="form.targetType === 'sequence'"
+                  >{{ t('restore.sequence')
+                  }}<input
+                    v-model="form.sequence"
+                    type="number"
+                    min="0"
+                    :max="modal.row.changeSequence"
+                    step="1"
+                    required /></label
+                ><label v-else
+                  >{{ t('restore.snapshotId')
+                  }}<input
+                    v-model="form.snapshotId"
+                    class="mono"
+                    pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+                    required /></label
+                ><label
+                  >{{ t('common.reason')
+                  }}<textarea
+                    v-model="form.reason"
+                    rows="3"
+                    maxlength="512"
+                    :placeholder="t('restore.reasonPlaceholder')"
+                    required
+                  ></textarea></label></template
+              ><template v-else
+                ><div class="notice warning">
+                  <app-icon name="alert"></app-icon>{{ t('restore.impact') }}
+                </div>
+                <div class="review-target">
+                  <span>{{
+                    t(
+                      form.targetType === 'sequence'
+                        ? 'restore.sequence'
+                        : 'restore.snapshotId',
+                    )
+                  }}</span
+                  ><strong class="mono">{{
+                    form.targetType === 'sequence'
+                      ? form.sequence
+                      : form.snapshotId
+                  }}</strong>
+                </div>
+                <label
+                  >{{ t('restore.confirmId')
+                  }}<input
+                    v-model="form.confirmId"
+                    @input="formError = ''"
+                    class="mono"
+                    :placeholder="modal.row.id"
+                    required
+                    autocomplete="off" /></label></template
+            ></template>
+            <template v-else-if="modal.type === 'create'"
+              ><label
+                >{{ t('auth.email')
+                }}<input
+                  v-model="form.email"
+                  type="email"
+                  autocomplete="off"
+                  required /></label
+              ><label
+                >{{ t('auth.password')
+                }}<input
+                  v-model="form.password"
+                  type="password"
+                  minlength="12"
+                  autocomplete="off"
+                  required /></label
+              ><small class="field-hint">{{ t('auth.passwordHint') }}</small
+              ><label
+                >{{ t('auth.confirmPassword')
+                }}<input
+                  v-model="form.confirmPassword"
+                  type="password"
+                  autocomplete="off"
+                  required /></label
+            ></template>
+            <template v-else-if="['enable', 'disable'].includes(modal.type)"
+              ><div class="target-card">
+                <span class="avatar blue">{{
+                  modal.row.email.slice(0, 1).toUpperCase()
+                }}</span>
+                <div>
+                  <strong>{{ modal.row.email }}</strong
+                  ><small class="mono">{{ modal.row.id }}</small>
+                </div>
+              </div>
+              <label
+                >{{ t('common.reason')
+                }}<textarea
+                  v-model="form.reason"
+                  maxlength="512"
+                  rows="3"
+                  required
+                ></textarea></label
+              ><label v-if="modal.type === 'disable'"
+                >{{ t('users.confirmId')
+                }}<input
+                  v-model="form.confirmId"
+                  @input="formError = ''"
+                  class="mono"
+                  required /></label
+            ></template>
+            <div v-else-if="modal.type === 'registration'" class="notice info">
+              {{
+                t(registration ? 'settings.closeImpact' : 'settings.openImpact')
+              }}
+            </div>
+            <p v-if="formError" class="form-error" role="alert">
+              {{ formError }}
+            </p>
+            <footer class="modal-footer">
+              <button
+                type="button"
+                class="button"
+                @click="
+                  modal.type === 'restore' && restoreStep === 2
+                    ? (restoreStep = 1)
+                    : closeModal()
+                "
+              >
+                {{
+                  t(
+                    modal.type === 'restore' && restoreStep === 2
+                      ? 'common.back'
+                      : 'common.cancel',
+                  )
+                }}</button
+              ><button
+                class="button"
+                :class="modal.type === 'disable' ? 'danger-button' : 'primary'"
+              >
+                {{
+                  t(
+                    modal.type === 'restore'
+                      ? restoreStep === 1
+                        ? 'restore.next'
+                        : 'restore.submit'
+                      : 'common.confirm',
+                  )
+                }}
+              </button>
+            </footer>
+          </form></template
+        >
+      </dialog>
+      <div v-if="toast" class="toast" role="status">
+        <app-icon name="check"></app-icon>{{ toast }}
+      </div>
+    </div>
+  </body>
+</html>
