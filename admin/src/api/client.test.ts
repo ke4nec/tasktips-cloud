@@ -261,4 +261,112 @@ describe('ApiClient', () => {
       }),
     );
   });
+
+  it('posts self-registration without administrator headers', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'user-1',
+          email: 'user@example.test',
+          status: 'pending',
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const client = new ApiClient(fetcher);
+
+    await expect(
+      client.register('user@example.test', 'password-twelve'),
+    ).resolves.toEqual({
+      id: 'user-1',
+      email: 'user@example.test',
+      status: 'pending',
+    });
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/auth/register',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          email: 'user@example.test',
+          password: 'password-twelve',
+        }),
+      }),
+    );
+    expect(
+      (fetcher.mock.calls[0]?.[1]?.headers as Record<string, string>).Origin,
+    ).toBeUndefined();
+  });
+
+  it('reads the public registration switch', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ enabled: true }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    await expect(new ApiClient(fetcher).registrationStatus()).resolves.toEqual({
+      enabled: true,
+    });
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/auth/registration-status');
+  });
+
+  it('creates users and toggles account status from the admin console', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'user-1',
+            email: 'user@example.test',
+            role: 'user',
+            status: 'active',
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    const client = new ApiClient(fetcher);
+    client.setAccessToken('admin-access');
+
+    await client.createUser('user@example.test', 'password-twelve');
+    await client.setAccountStatus('user-1', 'disable', 'abuse observed');
+    await client.setAccountStatus('user-1', 'enable', 'appeal accepted');
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/admin/users');
+    expect(fetcher.mock.calls[1]?.[0]).toBe(
+      '/api/v1/admin/users/user-1/disable',
+    );
+    expect(fetcher.mock.calls[2]?.[0]).toBe(
+      '/api/v1/admin/users/user-1/enable',
+    );
+    expect(fetcher.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        headers: expect.objectContaining({ Origin: location.origin }),
+      }),
+    );
+  });
+
+  it('updates the registration switch with PUT', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ enabled: true }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const client = new ApiClient(fetcher);
+    client.setAccessToken('admin-access');
+
+    await client.getRegistrationSettings();
+    await expect(client.updateRegistrationSettings(true)).resolves.toEqual({
+      enabled: true,
+    });
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      '/api/v1/admin/settings/registration',
+    );
+    expect(fetcher.mock.calls[1]?.[0]).toBe(
+      '/api/v1/admin/settings/registration',
+    );
+    expect(fetcher.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
 });

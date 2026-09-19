@@ -92,6 +92,18 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml run --rm tasktips-a
   tasktips-api admin create --email admin@example.com
 ```
 
+## 用户注册与审批
+
+自助注册默认关闭。管理员在管理后台“设置”页打开后，用户可在 `/admin/register`
+自助申请账号（邮箱 + ≥12 位密码）；新账号为 `pending`，登录/同步一律拒绝，
+须管理员在“用户”页批准（`pending` 点批准）后才可用。管理员也可直接新建立即可用的账号、
+禁用/启用任意账号。滥用时回设置页一键关闭即可，已发账号不受影响。
+
+相关接口：`POST /api/v1/auth/register`（公开）、
+`GET /api/v1/auth/registration-status`（公开，只返回开关）、
+`POST /api/v1/admin/users`（直建）、`GET|PUT /api/v1/admin/settings/registration`（开关）、
+`POST /api/v1/admin/users/{userId}/enable|disable`（批准/启停）。
+
 ## 升级
 
 1. 阅读发布说明，确认迁移是 forward-only，并先完成备份。

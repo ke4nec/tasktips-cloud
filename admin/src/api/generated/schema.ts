@@ -225,6 +225,43 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/auth/register': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Self-register an account pending administrator approval
+     * @description Creates a disabled-by-default account. The account stays pending until an administrator enables it; no tokens are issued.
+     */
+    post: operations['register'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/auth/registration-status': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Whether self-service registration is open */
+    get: operations['registrationStatus'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/me': {
     parameters: {
       query?: never;
@@ -865,6 +902,28 @@ export interface paths {
      */
     get: operations['adminListUsers'];
     put?: never;
+    /**
+     * Create an immediately usable account
+     * @description Never returns password material. The account is active on creation.
+     */
+    post: operations['adminCreateUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/settings/registration': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read the self-service registration switch */
+    get: operations['getRegistrationSettings'];
+    /** Open or close self-service registration */
+    put: operations['updateRegistrationSettings'];
     post?: never;
     delete?: never;
     options?: never;
@@ -902,7 +961,10 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Enable an account */
+    /**
+     * Enable an account
+     * @description Also approves pending self-registered accounts.
+     */
     post: operations['enableAccount'];
     delete?: never;
     options?: never;
@@ -1243,6 +1305,35 @@ export interface components {
       password: string;
       /** Format: uuid */
       deviceId: string;
+    };
+    RegisterRequest: {
+      /** Format: email */
+      email: string;
+      password: string;
+    };
+    RegisterResponse: {
+      /** Format: uuid */
+      id: string;
+      email: string;
+      status: string;
+    };
+    AdminCreateUserRequest: {
+      /** Format: email */
+      email: string;
+      password: string;
+    };
+    AdminCreateUserResponse: {
+      /** Format: uuid */
+      id: string;
+      email: string;
+      role: string;
+      status: string;
+    };
+    RegistrationSettings: {
+      enabled: boolean;
+    };
+    UpdateRegistrationSettingsRequest: {
+      enabled: boolean;
     };
     TokenResponse: {
       accessToken: string;
@@ -1980,6 +2071,56 @@ export interface operations {
       400: components['responses']['InvalidRequest'];
       408: components['responses']['RequestTimeout'];
       429: components['responses']['RateLimited'];
+    };
+  };
+  register: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RegisterRequest'];
+      };
+    };
+    responses: {
+      /** @description Registration accepted, awaiting approval. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RegisterResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      403: components['responses']['Forbidden'];
+      408: components['responses']['RequestTimeout'];
+      409: components['responses']['Conflict'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  registrationStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Registration switch state. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RegistrationSettings'];
+        };
+      };
+      408: components['responses']['RequestTimeout'];
     };
   };
   getCurrentUser: {
@@ -3087,6 +3228,83 @@ export interface operations {
           'application/json': components['schemas']['AdminUserList'];
         };
       };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  adminCreateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AdminCreateUserRequest'];
+      };
+    };
+    responses: {
+      /** @description Account created. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminCreateUserResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      409: components['responses']['Conflict'];
+    };
+  };
+  getRegistrationSettings: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Registration switch state. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RegistrationSettings'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+    };
+  };
+  updateRegistrationSettings: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateRegistrationSettingsRequest'];
+      };
+    };
+    responses: {
+      /** @description Updated registration switch state. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RegistrationSettings'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
       401: components['responses']['Unauthorized'];
       403: components['responses']['Forbidden'];
     };

@@ -4,6 +4,7 @@ import {
   DataAnalysis,
   Files,
   Monitor,
+  Setting,
   Tickets,
   User,
 } from '@element-plus/icons-vue';
@@ -52,16 +53,17 @@ onMounted(async () => {
 watch(
   () => [auth.ready, auth.authenticated, route.path] as const,
   ([ready, authenticated, path]) => {
-    if (ready && !authenticated && path !== '/login')
+    if (ready && !authenticated && path !== '/login' && path !== '/register')
       void router.replace('/login');
-    if (ready && authenticated && path === '/login') void router.replace('/');
+    if (ready && authenticated && (path === '/login' || path === '/register'))
+      void router.replace('/');
   },
   { immediate: true },
 );
 </script>
 
 <template>
-  <router-view v-if="route.path === '/login'" />
+  <router-view v-if="route.path === '/login' || route.path === '/register'" />
   <el-container v-else-if="auth.authenticated" class="app-shell">
     <el-header class="topbar">
       <strong>{{ t('app.name') }}</strong>
@@ -104,6 +106,10 @@ watch(
           <el-menu-item index="/audit">
             <el-icon><Tickets /></el-icon>
             <span>{{ t('navigation.audit') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/settings">
+            <el-icon><Setting /></el-icon>
+            <span>{{ t('navigation.settings') }}</span>
           </el-menu-item>
         </el-menu>
       </el-aside>

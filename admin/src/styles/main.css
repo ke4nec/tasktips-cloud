@@ -213,6 +213,23 @@ body {
   margin-top: 8px;
 }
 
+.auth-switch {
+  margin: 16px 0 0;
+  text-align: center;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.setting-row p {
+  margin: 4px 0 0;
+  color: #616871;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #e6e8eb;

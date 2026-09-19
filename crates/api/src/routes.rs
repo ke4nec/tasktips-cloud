@@ -323,6 +323,49 @@ pub struct CreateInvitationRequest {
     email: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegisterRequest {
+    email: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterResponse {
+    id: Uuid,
+    email: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCreateUserRequest {
+    email: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminCreateUserResponse {
+    id: Uuid,
+    email: String,
+    role: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrationSettingsResponse {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateRegistrationSettingsRequest {
+    enabled: bool,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateInvitationResponse {
@@ -1638,6 +1681,85 @@ pub async fn activate_invitation(
     )
 }
 
+pub async fn register(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<RegisterRequest>,
+) -> Result<(StatusCode, Json<RegisterResponse>), ApiError> {
+    let request_id = request_id(&headers);
+    let email = normalize_email(&request.email)
+        .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
+    let (database, auth) = services(&state, &request_id)?;
+    if !auth.allow_auth_request(
+        AuthOperation::Register,
+        &auth_rate_limit_key(&headers, &email),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!("register:{}", auth_rate_limit_key(&headers, &email)),
+        &request_id,
+    )
+    .await?;
+    let enabled = database
+        .registration_enabled()
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    if !enabled {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "REGISTRATION_DISABLED",
+            "自助注册当前未开放",
+            false,
+            request_id,
+        ));
+    }
+    if !valid_password(&request.password) {
+        return Err(ApiError::invalid("密码至少需要 12 个字符", request_id));
+    }
+    let password_hash = run_password_task(request.password, |password| hash_password(&password))
+        .await
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let user = database
+        .register_user(&email, request.email.trim(), &password_hash, &request_id)
+        .await
+        .map_err(|error| match error {
+            PersistenceError::Conflict => ApiError::new(
+                StatusCode::CONFLICT,
+                "EMAIL_REGISTERED",
+                "该邮箱已注册",
+                false,
+                request_id.clone(),
+            ),
+            other => map_persistence(other, request_id.clone()),
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(RegisterResponse {
+            id: user.id,
+            email: user.email,
+            status: user.status,
+        }),
+    ))
+}
+
+pub async fn registration_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<RegistrationSettingsResponse>, ApiError> {
+    let request_id = request_id(&headers);
+    let database = state
+        .database
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable(request_id.clone()))?;
+    let enabled = database
+        .registration_enabled()
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(RegistrationSettingsResponse { enabled }))
+}
+
 pub async fn current_user(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1914,6 +2036,52 @@ pub async fn create_invitation(
     ))
 }
 
+pub async fn admin_create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<AdminCreateUserRequest>,
+) -> Result<(StatusCode, Json<AdminCreateUserResponse>), ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let email = normalize_email(&request.email)
+        .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    if !valid_password(&request.password) {
+        return Err(ApiError::invalid("密码至少需要 12 个字符", request_id));
+    }
+    let password_hash = run_password_task(request.password, |password| hash_password(&password))
+        .await
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let user = database
+        .admin_create_user(
+            claims.sub,
+            &email,
+            request.email.trim(),
+            &password_hash,
+            &request_id,
+        )
+        .await
+        .map_err(|error| match error {
+            PersistenceError::Conflict => ApiError::new(
+                StatusCode::CONFLICT,
+                "EMAIL_REGISTERED",
+                "该邮箱已注册",
+                false,
+                request_id.clone(),
+            ),
+            other => map_persistence(other, request_id.clone()),
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(AdminCreateUserResponse {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            status: user.status,
+        }),
+    ))
+}
+
 pub async fn admin_list_invitations(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1998,6 +2166,34 @@ pub async fn admin_list_users(
     Ok(Json(
         json!({"items": users, "hasMore": has_more, "nextOffset": next_offset, "limit": limit, "offset": offset}),
     ))
+}
+
+pub async fn get_registration_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<RegistrationSettingsResponse>, ApiError> {
+    let request_id = request_id(&headers);
+    let (database, _) = authenticate_admin(&state, &headers, &request_id).await?;
+    let enabled = database
+        .registration_enabled()
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(RegistrationSettingsResponse { enabled }))
+}
+
+pub async fn update_registration_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<UpdateRegistrationSettingsRequest>,
+) -> Result<Json<RegistrationSettingsResponse>, ApiError> {
+    let request_id = request_id(&headers);
+    validate_admin_origin(&state, &headers, &request_id)?;
+    let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
+    let enabled = database
+        .set_registration_enabled(claims.sub, request.enabled, &request_id)
+        .await
+        .map_err(|error| map_persistence(error, request_id))?;
+    Ok(Json(RegistrationSettingsResponse { enabled }))
 }
 
 pub async fn admin_list_all_projects(

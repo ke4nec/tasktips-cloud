@@ -1600,6 +1600,139 @@ impl Persistence {
         })
     }
 
+    /// Registers a self-service account in `pending` state. An administrator
+    /// must activate it before it can sign in.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the email is already registered or the insert fails.
+    pub async fn register_user(
+        &self,
+        email_normalized: &str,
+        email_display: &str,
+        password_hash: &str,
+        request_id: &str,
+    ) -> Result<UserRecord, PersistenceError> {
+        let mut tx = self.begin_auth().await?;
+        let user = sqlx::query_as::<_, UserRecord>(
+            "INSERT INTO users (email_normalized, email_display, password_hash, role, status) \
+             VALUES ($1, $2, $3, 'user', 'pending') \
+             RETURNING id, email_display AS email, password_hash, role::text AS role, \
+                       status::text AS status, created_at, last_login_at",
+        )
+        .bind(email_normalized)
+        .bind(email_display)
+        .bind(password_hash)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_conflict)?;
+        insert_audit(
+            &mut tx,
+            user.id,
+            Some(user.id),
+            "auth.registered",
+            json!({}),
+            request_id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    /// Creates an immediately usable account on behalf of an administrator.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the actor is not an administrator, the email is
+    /// already registered, or the insert fails.
+    pub async fn admin_create_user(
+        &self,
+        actor_user_id: Uuid,
+        email_normalized: &str,
+        email_display: &str,
+        password_hash: &str,
+        request_id: &str,
+    ) -> Result<UserRecord, PersistenceError> {
+        let mut tx = self.begin_auth().await?;
+        require_admin(&mut tx, actor_user_id).await?;
+        let user = sqlx::query_as::<_, UserRecord>(
+            "INSERT INTO users (email_normalized, email_display, password_hash, role, status) \
+             VALUES ($1, $2, $3, 'user', 'active') \
+             RETURNING id, email_display AS email, password_hash, role::text AS role, \
+                       status::text AS status, created_at, last_login_at",
+        )
+        .bind(email_normalized)
+        .bind(email_display)
+        .bind(password_hash)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_conflict)?;
+        insert_audit(
+            &mut tx,
+            actor_user_id,
+            Some(user.id),
+            "user.created_by_admin",
+            json!({}),
+            request_id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    /// Reads the self-service registration switch. Missing records mean closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `SQLx` query error when the settings row cannot be read.
+    pub async fn registration_enabled(&self) -> Result<bool, PersistenceError> {
+        let value: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT value FROM instance_settings WHERE key = 'registration.enabled'",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(PersistenceError::Database)?;
+        Ok(value
+            .and_then(|settings| settings.get("enabled").and_then(serde_json::Value::as_bool))
+            .unwrap_or(false))
+    }
+
+    /// Opens or closes self-service registration. Only administrators may call it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the actor is not an administrator or the switch
+    /// cannot be persisted.
+    pub async fn set_registration_enabled(
+        &self,
+        actor_user_id: Uuid,
+        enabled: bool,
+        request_id: &str,
+    ) -> Result<bool, PersistenceError> {
+        self.verify_admin(actor_user_id).await?;
+        sqlx::query(
+            "INSERT INTO instance_settings (key, value) VALUES ('registration.enabled', $1) \
+             ON CONFLICT (key) DO UPDATE \
+             SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(json!({"enabled": enabled}))
+        .execute(&self.pool)
+        .await
+        .map_err(PersistenceError::Database)?;
+        let mut tx = self.begin_auth().await?;
+        insert_audit(
+            &mut tx,
+            actor_user_id,
+            None,
+            "settings.registration_changed",
+            json!({"enabled": enabled}),
+            request_id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(enabled)
+    }
+
     /// # Errors
     ///
     /// Returns an error when the user cannot be read through RLS.
@@ -4934,7 +5067,7 @@ impl Persistence {
         .ok_or(PersistenceError::NotFound)?;
         let allowed_transition = matches!(
             (current_status.as_str(), status),
-            ("active", AccountStatus::Disabled) | ("disabled", AccountStatus::Active)
+            ("active", AccountStatus::Disabled) | ("disabled" | "pending", AccountStatus::Active)
         );
         if !allowed_transition {
             return Err(PersistenceError::InvalidAccountTransition);

@@ -290,6 +290,52 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '408':
           $ref: '#/components/responses/RequestTimeout'
+  /api/v1/auth/register:
+    post:
+      operationId: register
+      summary: Self-register an account pending administrator approval
+      description: Creates a disabled-by-default account. The account stays
+        pending until an administrator enables it; no tokens are issued.
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Registration accepted, awaiting approval.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/auth/registration-status:
+    get:
+      operationId: registrationStatus
+      summary: Whether self-service registration is open
+      tags: [Authentication]
+      security: []
+      responses:
+        '200':
+          description: Registration switch state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationSettings'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
   /api/v1/me:
     get:
       operationId: getCurrentUser
@@ -1382,6 +1428,77 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: adminCreateUser
+      summary: Create an immediately usable account
+      description: Never returns password material. The account is active on creation.
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateUserRequest'
+      responses:
+        '201':
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCreateUserResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/admin/settings/registration:
+    get:
+      operationId: getRegistrationSettings
+      summary: Read the self-service registration switch
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Registration switch state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      operationId: updateRegistrationSettings
+      summary: Open or close self-service registration
+      tags: [Administration]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRegistrationSettingsRequest'
+      responses:
+        '200':
+          description: Updated registration switch state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationSettings'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/admin/users/{userId}/disable:
     parameters:
       - $ref: '#/components/parameters/UserId'
@@ -1416,6 +1533,7 @@ paths:
     post:
       operationId: enableAccount
       summary: Enable an account
+      description: Also approves pending self-registered accounts.
       tags: [Administration]
       security:
         - bearerAuth: []
@@ -2217,6 +2335,68 @@ components:
         deviceId:
           type: string
           format: uuid
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 12
+    RegisterResponse:
+      type: object
+      additionalProperties: false
+      required: [id, email, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        status:
+          type: string
+    AdminCreateUserRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 12
+    AdminCreateUserResponse:
+      type: object
+      additionalProperties: false
+      required: [id, email, role, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+    RegistrationSettings:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+    UpdateRegistrationSettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
     TokenResponse:
       type: object
       additionalProperties: false

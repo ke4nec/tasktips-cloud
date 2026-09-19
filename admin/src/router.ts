@@ -9,6 +9,11 @@ export const router = createRouter({
       component: () => import('./views/LoginView.vue'),
     },
     {
+      path: '/register',
+      name: 'register',
+      component: () => import('./views/RegisterView.vue'),
+    },
+    {
       path: '/',
       name: 'overview',
       component: () => import('./views/OverviewView.vue'),
@@ -42,6 +47,11 @@ export const router = createRouter({
       name: 'audit',
       component: () => import('./views/AdminDataView.vue'),
       props: { section: 'audit' },
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('./views/SettingsView.vue'),
     },
   ],
 });

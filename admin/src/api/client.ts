@@ -69,6 +69,46 @@ export class ApiClient {
     return this.adminPost('/api/v1/admin/auth/re-auth', { password });
   }
 
+  register(
+    email: string,
+    password: string,
+  ): Promise<components['schemas']['RegisterResponse']> {
+    return this.post('/api/v1/auth/register', { email, password });
+  }
+
+  registrationStatus(): Promise<components['schemas']['RegistrationSettings']> {
+    return this.get('/api/v1/auth/registration-status');
+  }
+
+  createUser(
+    email: string,
+    password: string,
+  ): Promise<components['schemas']['AdminCreateUserResponse']> {
+    return this.adminPost('/api/v1/admin/users', { email, password });
+  }
+
+  setAccountStatus(
+    userId: string,
+    action: 'enable' | 'disable',
+    reason: string,
+  ): Promise<void> {
+    return this.adminPost(`/api/v1/admin/users/${userId}/${action}`, {
+      reason,
+    }).then(() => undefined);
+  }
+
+  getRegistrationSettings(): Promise<
+    components['schemas']['RegistrationSettings']
+  > {
+    return this.get('/api/v1/admin/settings/registration');
+  }
+
+  updateRegistrationSettings(
+    enabled: boolean,
+  ): Promise<components['schemas']['RegistrationSettings']> {
+    return this.adminPut('/api/v1/admin/settings/registration', { enabled });
+  }
+
   getAdminOverview(): Promise<components['schemas']['AdminOverview']> {
     return this.get('/api/v1/admin/overview');
   }
@@ -201,8 +241,25 @@ export class ApiClient {
     body: unknown,
     extraHeaders: Record<string, string> = {},
   ): Promise<T> {
+    return this.adminWrite<T>('POST', path, body, extraHeaders);
+  }
+
+  private async adminPut<T>(
+    path: string,
+    body: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<T> {
+    return this.adminWrite<T>('PUT', path, body, extraHeaders);
+  }
+
+  private async adminWrite<T>(
+    method: 'POST' | 'PUT',
+    path: string,
+    body: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<T> {
     const response = await this.fetcher(path, {
-      method: 'POST',
+      method,
       credentials: 'include',
       headers: {
         ...this.headers(),

@@ -3,6 +3,8 @@ import { ElAlert } from 'element-plus/es/components/alert/index.mjs';
 import 'element-plus/es/components/alert/style/css.mjs';
 import { ElButton } from 'element-plus/es/components/button/index.mjs';
 import 'element-plus/es/components/button/style/css.mjs';
+import { ElDialog } from 'element-plus/es/components/dialog/index.mjs';
+import 'element-plus/es/components/dialog/style/css.mjs';
 import { ElEmpty } from 'element-plus/es/components/empty/index.mjs';
 import 'element-plus/es/components/empty/style/css.mjs';
 import { ElForm, ElFormItem } from 'element-plus/es/components/form/index.mjs';
@@ -45,6 +47,16 @@ const restoreMessage = ref('');
 const pageOffset = ref(0);
 const hasMore = ref(false);
 const pageSize = 100;
+const userDialogVisible = ref(false);
+const userDialogMode = ref<'create' | 'status'>('create');
+const statusAction = ref<'enable' | 'disable'>('enable');
+const statusUser = ref<Row>();
+const newUserEmail = ref('');
+const newUserPassword = ref('');
+const newUserConfirm = ref('');
+const statusReason = ref('');
+const userDialogLoading = ref(false);
+const userDialogError = ref<string>();
 const trendRows = ref<Row[]>([]);
 const restoreProjectRows = ref<Row[]>([]);
 const projectSearchLoading = ref(false);
@@ -262,6 +274,80 @@ function display(value: unknown): string {
   return String(value);
 }
 
+function userActions(row: Row): Array<'approve' | 'enable' | 'disable'> {
+  if (row.status === 'pending') return ['approve'];
+  if (row.status === 'disabled') return ['enable'];
+  if (row.status === 'active') return ['disable'];
+  return [];
+}
+
+function openCreateUser(): void {
+  userDialogMode.value = 'create';
+  newUserEmail.value = '';
+  newUserPassword.value = '';
+  newUserConfirm.value = '';
+  userDialogError.value = undefined;
+  userDialogVisible.value = true;
+}
+
+function openStatusAction(
+  row: Row,
+  action: 'approve' | 'enable' | 'disable',
+): void {
+  userDialogMode.value = 'status';
+  statusAction.value = action === 'disable' ? 'disable' : 'enable';
+  statusUser.value = row;
+  statusReason.value = t(
+    action === 'approve'
+      ? 'users.approveReason'
+      : `users.${statusAction.value}Reason`,
+  );
+  userDialogError.value = undefined;
+  userDialogVisible.value = true;
+}
+
+async function submitUserDialog(): Promise<void> {
+  if (userDialogLoading.value) return;
+  userDialogError.value = undefined;
+  if (userDialogMode.value === 'create') {
+    if (!newUserEmail.value.trim() || newUserPassword.value.length < 12) {
+      userDialogError.value = t('users.createHint');
+      return;
+    }
+    if (newUserPassword.value !== newUserConfirm.value) {
+      userDialogError.value = t('users.passwordMismatch');
+      return;
+    }
+  } else if (!statusReason.value.trim()) {
+    userDialogError.value = t('users.reasonRequired');
+    return;
+  }
+  userDialogLoading.value = true;
+  try {
+    if (userDialogMode.value === 'create') {
+      await apiClient.createUser(
+        newUserEmail.value.trim(),
+        newUserPassword.value,
+      );
+      restoreMessage.value = t('users.created');
+    } else {
+      await apiClient.setAccountStatus(
+        String(statusUser.value?.id ?? ''),
+        statusAction.value,
+        statusReason.value.trim(),
+      );
+      restoreMessage.value = t('users.statusUpdated');
+    }
+    userDialogVisible.value = false;
+    await load(true, false);
+  } catch (reason) {
+    userDialogError.value =
+      reason instanceof Error ? reason.message : t('page.loadFailed');
+  } finally {
+    userDialogLoading.value = false;
+  }
+}
+
 watch(
   () => props.section,
   () => {
@@ -291,6 +377,13 @@ onBeforeUnmount(() => {
       <el-button :loading="loading" @click="load(true)">{{
         t('actions.refresh')
       }}</el-button>
+      <el-button
+        v-if="props.section === 'users'"
+        type="primary"
+        @click="openCreateUser"
+      >
+        {{ t('users.createUser') }}
+      </el-button>
     </header>
     <el-alert v-if="error" :title="error" type="error" show-icon />
     <el-alert
@@ -352,6 +445,23 @@ onBeforeUnmount(() => {
       >
         <template #default="scope">{{ display(scope.row[column]) }}</template>
       </el-table-column>
+      <el-table-column
+        v-if="props.section === 'users'"
+        :label="t('columns.actions')"
+        min-width="200"
+      >
+        <template #default="scope">
+          <el-button
+            v-for="action in userActions(scope.row)"
+            :key="action"
+            link
+            type="primary"
+            @click="openStatusAction(scope.row, action)"
+          >
+            {{ t(`users.${action}`) }}
+          </el-button>
+        </template>
+      </el-table-column>
       <template #empty><el-empty :description="t('page.noData')" /></template>
     </el-table>
     <div
@@ -399,5 +509,74 @@ onBeforeUnmount(() => {
         {{ t('pagination.next') }}
       </el-button>
     </div>
+    <el-dialog
+      v-model="userDialogVisible"
+      :title="
+        userDialogMode === 'create'
+          ? t('users.createTitle')
+          : t(`users.${statusAction}Title`, {
+              email: display(statusUser?.email),
+            })
+      "
+      width="420px"
+    >
+      <el-alert
+        v-if="userDialogError"
+        :title="userDialogError"
+        type="error"
+        show-icon
+      />
+      <el-form
+        v-if="userDialogMode === 'create'"
+        @submit.prevent="submitUserDialog"
+      >
+        <el-form-item :label="t('auth.email')">
+          <el-input
+            v-model="newUserEmail"
+            type="email"
+            autocomplete="username"
+          />
+        </el-form-item>
+        <el-form-item :label="t('auth.password')">
+          <el-input
+            v-model="newUserPassword"
+            type="password"
+            show-password
+            autocomplete="new-password"
+          />
+        </el-form-item>
+        <el-form-item :label="t('register.confirm')">
+          <el-input
+            v-model="newUserConfirm"
+            type="password"
+            show-password
+            autocomplete="new-password"
+          />
+        </el-form-item>
+      </el-form>
+      <el-form v-else @submit.prevent="submitUserDialog">
+        <el-form-item :label="t('users.reason')">
+          <el-input
+            v-model="statusReason"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="userDialogVisible = false">
+          {{ t('actions.cancel') }}
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="userDialogLoading"
+          @click="submitUserDialog"
+        >
+          {{ t('actions.confirm') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>

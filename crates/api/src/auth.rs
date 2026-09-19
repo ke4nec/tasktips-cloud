@@ -66,6 +66,7 @@ pub enum AuthOperation {
     PayloadUpload,
     Purge,
     InvitationActivation,
+    Register,
 }
 
 struct AuthRateLimiter {
@@ -278,6 +279,7 @@ impl AuthOperation {
             Self::PayloadUpload => "payload_upload",
             Self::Purge => "purge",
             Self::InvitationActivation => "invitation_activation",
+            Self::Register => "register",
         }
     }
 }

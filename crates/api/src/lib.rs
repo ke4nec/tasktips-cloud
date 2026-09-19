@@ -30,15 +30,16 @@ use auth::AuthService;
 use cursor::CursorSigner;
 use routes::{
     activate_invitation, admin_audit_events, admin_audit_events_csv, admin_create_restore,
-    admin_history_metadata, admin_list_all_devices, admin_list_all_projects, admin_list_devices,
-    admin_list_invitations, admin_list_projects, admin_list_users, admin_login, admin_logout,
-    admin_operations, admin_overview, admin_reauth, admin_refresh, admin_resend_invitation,
-    admin_revoke_invitation, admin_trends, bootstrap, cancel_restore, change_password,
-    create_invitation, create_project, create_restore, create_snapshot, current_user,
-    disable_account, disable_project, enable_account, get_payload, get_project, get_restore,
-    head_payload, history, list_devices, list_projects, list_snapshots, login, logout,
-    object_history, pull, purge_account, purge_project, push, put_payload, refresh,
-    register_device, rename_project, reopen_restore_project, revoke_device, update_device,
+    admin_create_user, admin_history_metadata, admin_list_all_devices, admin_list_all_projects,
+    admin_list_devices, admin_list_invitations, admin_list_projects, admin_list_users, admin_login,
+    admin_logout, admin_operations, admin_overview, admin_reauth, admin_refresh,
+    admin_resend_invitation, admin_revoke_invitation, admin_trends, bootstrap, cancel_restore,
+    change_password, create_invitation, create_project, create_restore, create_snapshot,
+    current_user, disable_account, disable_project, enable_account, get_payload, get_project,
+    get_registration_settings, get_restore, head_payload, history, list_devices, list_projects,
+    list_snapshots, login, logout, object_history, pull, purge_account, purge_project, push,
+    put_payload, refresh, register, register_device, registration_status, rename_project,
+    reopen_restore_project, revoke_device, update_device, update_registration_settings,
 };
 
 const DEFAULT_UPLOAD_TEMP_MAX_BYTES: u64 = 512 * 1024 * 1024;
@@ -256,6 +257,8 @@ pub fn build_application_router(state: AppState) -> Router {
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/refresh", post(refresh))
         .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/auth/register", post(register))
+        .route("/api/v1/auth/registration-status", get(registration_status))
         .route("/api/v1/admin/auth/login", post(admin_login))
         .route("/api/v1/admin/auth/refresh", post(admin_refresh))
         .route("/api/v1/admin/auth/logout", post(admin_logout))
@@ -311,7 +314,10 @@ pub fn build_application_router(state: AppState) -> Router {
         .route("/api/v1/devices/register", post(register_device))
         .route("/api/v1/devices/{deviceId}", patch(update_device))
         .route("/api/v1/devices/{deviceId}/revoke", post(revoke_device))
-        .route("/api/v1/admin/users", get(admin_list_users))
+        .route(
+            "/api/v1/admin/users",
+            get(admin_list_users).post(admin_create_user),
+        )
         .route("/api/v1/admin/projects", get(admin_list_all_projects))
         .route("/api/v1/admin/devices", get(admin_list_all_devices))
         .route(
@@ -332,6 +338,10 @@ pub fn build_application_router(state: AppState) -> Router {
         )
         .route("/api/v1/admin/users/{userId}/enable", post(enable_account))
         .route("/api/v1/admin/users/{userId}/purge", post(purge_account))
+        .route(
+            "/api/v1/admin/settings/registration",
+            get(get_registration_settings).put(update_registration_settings),
+        )
         .route(
             "/api/v1/admin/users/{userId}/projects",
             get(admin_list_projects),
