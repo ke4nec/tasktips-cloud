@@ -27,11 +27,12 @@ cd "$DEPLOY_DIR"
 
 DOMAIN=""
 ADMIN_ORIGIN=""
+WEB_ORIGIN=""
 FORCE=0
 QUIET=0
 
 usage() {
-  echo "用法: bash deploy/setup.sh [--domain https://example.com] [--admin-origin URL] [--force] [--quiet]"
+  echo "用法: bash deploy/setup.sh [--domain https://example.com] [--admin-origin URL] [--web-origin URL] [--force] [--quiet]"
 }
 
 while [ $# -gt 0 ]; do
@@ -40,6 +41,8 @@ while [ $# -gt 0 ]; do
       DOMAIN="${2:?--domain requires a URL}"; shift 2;;
     --admin-origin)
       ADMIN_ORIGIN="${2:?--admin-origin requires a URL}"; shift 2;;
+    --web-origin)
+      WEB_ORIGIN="${2:?--web-origin requires a URL}"; shift 2;;
     --force)
       FORCE=1; shift;;
     --quiet)
@@ -114,10 +117,18 @@ if [ -n "$DOMAIN" ]; then
   # Origin 精确匹配：去掉用户顺手带上的尾斜杠。
   DOMAIN="${DOMAIN%/}"
   ADMIN_ORIGIN="${ADMIN_ORIGIN%/}"
+  WEB_ORIGIN="${WEB_ORIGIN%/}"
   set_env TASKTIPS_PUBLIC_BASE_URL "$DOMAIN"
   set_env TASKTIPS_ADMIN_ORIGIN "${ADMIN_ORIGIN:-$DOMAIN}"
-elif [ -n "$ADMIN_ORIGIN" ]; then
-  set_env TASKTIPS_ADMIN_ORIGIN "${ADMIN_ORIGIN%/}"
+  # Web 前端与 API 同域部署时跟随主域；独立域名时用 --web-origin 显式指定。
+  set_env TASKTIPS_WEB_ORIGIN "${WEB_ORIGIN:-$DOMAIN}"
+else
+  if [ -n "$ADMIN_ORIGIN" ]; then
+    set_env TASKTIPS_ADMIN_ORIGIN "${ADMIN_ORIGIN%/}"
+  fi
+  if [ -n "$WEB_ORIGIN" ]; then
+    set_env TASKTIPS_WEB_ORIGIN "${WEB_ORIGIN%/}"
+  fi
 fi
 
 KEY_FILE=secrets/tasktips_jwt_private_key

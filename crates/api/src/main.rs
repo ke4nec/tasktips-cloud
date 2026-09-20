@@ -63,11 +63,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .map(|_| env::var("TASKTIPS_ADMIN_ORIGIN"))
         .transpose()?;
+    let web_origin = auth
+        .as_ref()
+        .map(|_| env::var("TASKTIPS_WEB_ORIGIN"))
+        .transpose()?;
     let object_store = build_object_store();
     let readiness = Readiness::new(database.clone(), object_store.clone());
     let mut state = AppState::new(readiness, database, auth);
     if let Some(admin_origin) = admin_origin {
         state = state.with_admin_origin(admin_origin);
+    }
+    if let Some(web_origin) = web_origin {
+        state = state.with_web_origin(web_origin);
     }
     if let Some(object_store) = object_store {
         let cursor_secret = env::var("TASKTIPS_CURSOR_SIGNING_SECRET")?;

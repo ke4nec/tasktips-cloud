@@ -1325,6 +1325,61 @@ impl Persistence {
         Ok(())
     }
 
+    /// Revokes the device session that owns a refresh token hash.
+    ///
+    /// This is the Web cookie logout path: the session is located through the
+    /// refresh cookie only, without a valid access token. Unknown, expired, or
+    /// already-revoked tokens succeed without changes so repeated logout stays
+    /// idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only for database failures.
+    pub async fn logout_device_by_refresh_token(
+        &self,
+        token_hash: &[u8],
+        request_id: &str,
+    ) -> Result<(), PersistenceError> {
+        #[derive(FromRow)]
+        struct TokenRow {
+            user_id: Uuid,
+            device_id: Uuid,
+        }
+
+        let mut tx = self.begin_auth().await?;
+        let Some(token) = sqlx::query_as::<_, TokenRow>(
+            "SELECT user_id, device_id FROM refresh_tokens WHERE token_hash = $1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            tx.rollback().await?;
+            return Ok(());
+        };
+        let revoked = sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP \
+             WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(token.user_id)
+        .bind(token.device_id)
+        .execute(&mut *tx)
+        .await?;
+        if revoked.rows_affected() > 0 {
+            insert_audit(
+                &mut tx,
+                token.user_id,
+                Some(token.user_id),
+                "auth.web.logout",
+                json!({"deviceId": token.device_id}),
+                request_id,
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Validates mutable account and device state for an otherwise valid access token.
     ///
     /// # Errors

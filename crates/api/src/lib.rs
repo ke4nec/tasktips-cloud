@@ -5,8 +5,9 @@ mod routes;
 use axum::{
     BoxError, Json, Router,
     error_handling::HandleErrorLayer,
-    extract::State,
+    extract::{Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
@@ -40,6 +41,7 @@ use routes::{
     list_snapshots, login, logout, object_history, pull, purge_account, purge_project, push,
     put_payload, refresh, register, register_device, registration_status, rename_project,
     reopen_restore_project, revoke_device, update_device, update_registration_settings,
+    web_activate_invitation, web_login, web_logout, web_refresh,
 };
 
 const DEFAULT_UPLOAD_TEMP_MAX_BYTES: u64 = 512 * 1024 * 1024;
@@ -111,6 +113,7 @@ pub struct AppState {
     pub(crate) cursor: Option<CursorSigner>,
     pub(crate) metrics: Arc<ApiMetrics>,
     pub(crate) admin_origin: Option<Arc<str>>,
+    pub(crate) web_origin: Option<Arc<str>>,
     pub(crate) upload_budget: Arc<TempUploadBudget>,
 }
 
@@ -153,6 +156,7 @@ impl AppState {
             cursor: None,
             metrics: Arc::new(ApiMetrics::default()),
             admin_origin: None,
+            web_origin: None,
             upload_budget: Arc::new(TempUploadBudget::default()),
         }
     }
@@ -167,6 +171,12 @@ impl AppState {
     #[must_use]
     pub fn with_admin_origin(mut self, origin: impl Into<Arc<str>>) -> Self {
         self.admin_origin = Some(origin.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_web_origin(mut self, origin: impl Into<Arc<str>>) -> Self {
+        self.web_origin = Some(origin.into());
         self
     }
 
@@ -266,6 +276,17 @@ pub fn build_application_router(state: AppState) -> Router {
         .route(
             "/api/v1/auth/invitations/activate",
             post(activate_invitation),
+        )
+        // 浏览器会话接口（设计文档 §8.2）：POST-only、独立前缀挂载并统一 no-store。
+        .nest(
+            "/api/v1/web/auth",
+            Router::new()
+                .route("/login", post(web_login))
+                .route("/invitations/activate", post(web_activate_invitation))
+                .route("/refresh", post(web_refresh))
+                .route("/logout", post(web_logout))
+                .layer(middleware::from_fn(no_store_auth_responses))
+                .with_state(state.clone()),
         )
         .route("/api/v1/me", get(current_user))
         .route("/api/v1/me/password", patch(change_password))
@@ -405,6 +426,15 @@ async fn liveness() -> Json<HealthResponse> {
         database: None,
         object_store: None,
     })
+}
+
+// 认证响应不得被缓存（设计文档 §8.2），对 /api/v1/web/auth 下所有响应生效。
+async fn no_store_auth_responses(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn readiness_check(State(state): State<AppState>) -> impl IntoResponse {

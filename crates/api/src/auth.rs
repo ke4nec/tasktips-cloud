@@ -67,6 +67,10 @@ pub enum AuthOperation {
     Purge,
     InvitationActivation,
     Register,
+    WebLogin,
+    WebRefresh,
+    WebInvitationActivation,
+    WebLogout,
 }
 
 struct AuthRateLimiter {
@@ -280,6 +284,10 @@ impl AuthOperation {
             Self::Purge => "purge",
             Self::InvitationActivation => "invitation_activation",
             Self::Register => "register",
+            Self::WebLogin => "web_login",
+            Self::WebRefresh => "web_refresh",
+            Self::WebInvitationActivation => "web_invitation_activation",
+            Self::WebLogout => "web_logout",
         }
     }
 }

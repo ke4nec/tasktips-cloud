@@ -262,6 +262,86 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/web/auth/login': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Authenticate a web user and set the refresh cookie
+     * @description Browser session login for role=user accounts. Returns an access token in the body and sets the HttpOnly Secure SameSite=Strict tasktips_web_refresh cookie scoped to /api/v1/web/auth. Requires an exact Origin match and rejects cross-site fetch metadata.
+     */
+    post: operations['webLogin'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/web/auth/invitations/activate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Activate an invited account from the browser
+     * @description Same semantics as /api/v1/auth/invitations/activate, but the issued refresh token is delivered through the tasktips_web_refresh cookie instead of the response body. Requires an exact Origin match and rejects cross-site fetch metadata.
+     */
+    post: operations['webActivateInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/web/auth/refresh': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Rotate the web refresh cookie
+     * @description Reads the tasktips_web_refresh cookie, rotates it, and returns a new access token. No JSON credentials are accepted. Requires an exact Origin match and rejects cross-site fetch metadata.
+     */
+    post: operations['webRefreshToken'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/web/auth/logout': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Revoke the web device session through the refresh cookie
+     * @description Locates the device session via the refresh cookie without requiring a valid access token, revokes it, and clears the cookie. Repeated logout succeeds; a missing or stale cookie still returns 204.
+     */
+    post: operations['webLogout'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/me': {
     parameters: {
       query?: never;
@@ -1339,6 +1419,10 @@ export interface components {
       refreshToken: string;
       expiresIn: number;
     };
+    WebTokenResponse: {
+      accessToken: string;
+      expiresIn: number;
+    };
     AdminTokenResponse: {
       accessToken: string;
       expiresIn: number;
@@ -2119,6 +2203,111 @@ export interface operations {
         };
       };
       408: components['responses']['RequestTimeout'];
+    };
+  };
+  webLogin: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['LoginRequest'];
+      };
+    };
+    responses: {
+      /** @description Web access token and refresh cookie. */
+      200: {
+        headers: {
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WebTokenResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      408: components['responses']['RequestTimeout'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  webActivateInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['InvitationActivationRequest'];
+      };
+    };
+    responses: {
+      /** @description Activated account with web access token and refresh cookie. */
+      200: {
+        headers: {
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WebTokenResponse'];
+        };
+      };
+      400: components['responses']['InvalidRequest'];
+      408: components['responses']['RequestTimeout'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  webRefreshToken: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Rotated web access token and refresh cookie. */
+      200: {
+        headers: {
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WebTokenResponse'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      403: components['responses']['Forbidden'];
+      408: components['responses']['RequestTimeout'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  webLogout: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The web device session was revoked and the cookie cleared. */
+      204: {
+        headers: {
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: components['responses']['Forbidden'];
+      408: components['responses']['RequestTimeout'];
+      429: components['responses']['RateLimited'];
     };
   };
   getCurrentUser: {

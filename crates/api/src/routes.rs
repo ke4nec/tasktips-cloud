@@ -38,6 +38,7 @@ use crate::{
 };
 
 const ADMIN_REFRESH_COOKIE: &str = "tasktips_admin_refresh";
+const WEB_REFRESH_COOKIE: &str = "tasktips_web_refresh";
 const MAX_OPTIONAL_JSON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 
@@ -269,6 +270,15 @@ pub struct TokenResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminTokenResponse {
+    access_token: String,
+    expires_in: i64,
+}
+
+// 浏览器会话响应（设计文档 §8.2）：独立于 AdminTokenResponse 表达普通用户身份，
+// 刷新令牌只进 HttpOnly Cookie，不出现在响应体。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebTokenResponse {
     access_token: String,
     expires_in: i64,
 }
@@ -1682,6 +1692,232 @@ pub async fn activate_invitation(
     )
 }
 
+// ---- 浏览器会话接口（设计文档 §8.2）：Cookie 刷新 + Origin 校验，只服务 role=user。 ----
+
+pub async fn web_login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<LoginRequest>,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_web_origin(&state, &headers, &request_id)?;
+    let email = normalize_email(&request.email)
+        .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
+    let (database, auth) = services(&state, &request_id)?;
+    if !auth.allow_auth_request(
+        AuthOperation::WebLogin,
+        &auth_rate_limit_key(&headers, &email),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!("web_login:{}", auth_rate_limit_key(&headers, &email)),
+        &request_id,
+    )
+    .await?;
+    let user = database
+        .find_login_user(&email)
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    let Some(user) = user else {
+        run_password_task(request.password, |password| {
+            hash_password(&password).map(|_| true)
+        })
+        .await
+        .map_err(|_| ApiError::authentication(request_id.clone()))?;
+        return Err(ApiError::authentication(request_id));
+    };
+    let password_hash = user.password_hash.clone();
+    let valid = run_password_task(request.password, move |password| {
+        Ok(verify_password(&password, &password_hash))
+    })
+    .await
+    .map_err(|_| ApiError::internal(request_id.clone()))?;
+    if !valid {
+        return Err(ApiError::authentication(request_id));
+    }
+    if user.role != "user" {
+        return Err(ApiError::authentication(request_id));
+    }
+    if user.status != "active" {
+        return Err(account_disabled(request_id));
+    }
+
+    let opaque = auth
+        .issue_refresh_token()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let refresh = NewRefreshToken {
+        token_hash: opaque.hash,
+        family_id: Uuid::new_v4(),
+        expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
+    };
+    let session = database
+        .create_login_session(user.id, request.device_id, &refresh, &request_id)
+        .await
+        .map_err(|error| match error {
+            PersistenceError::NotFound => ApiError::authentication(request_id.clone()),
+            other => map_persistence(other, request_id.clone()),
+        })?;
+    web_token_response(
+        auth,
+        &session.user,
+        session.device_id,
+        &opaque.raw,
+        &request_id,
+    )
+}
+
+pub async fn web_activate_invitation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<InvitationActivationRequest>,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_web_origin(&state, &headers, &request_id)?;
+    let (database, auth) = services(&state, &request_id)?;
+    if !auth.allow_auth_request(
+        AuthOperation::WebInvitationActivation,
+        &auth_rate_limit_key(&headers, "web-invitation"),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!(
+            "web_invitation_activation:{}",
+            auth_rate_limit_key(&headers, "web-invitation")
+        ),
+        &request_id,
+    )
+    .await?;
+    if !valid_password(&request.password) {
+        return Err(ApiError::invalid(
+            "密码至少 12 位，且需包含字母和数字",
+            request_id,
+        ));
+    }
+    let password_hash = run_password_task(request.password, |password| hash_password(&password))
+        .await
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let opaque = auth
+        .issue_refresh_token()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let refresh = NewRefreshToken {
+        token_hash: opaque.hash,
+        family_id: Uuid::new_v4(),
+        expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
+    };
+    let session = database
+        .activate_invitation(
+            &opaque_token_hash(&request.invitation_token),
+            &password_hash,
+            request.device_id,
+            &refresh,
+            &request_id,
+        )
+        .await
+        .map_err(|error| match error {
+            PersistenceError::InvalidInvitation
+            | PersistenceError::NotFound
+            | PersistenceError::DeviceRevoked => {
+                ApiError::invalid("邀请无效或已过期", request_id.clone())
+            }
+            other => map_persistence(other, request_id.clone()),
+        })?;
+    web_token_response(
+        auth,
+        &session.user,
+        session.device_id,
+        &opaque.raw,
+        &request_id,
+    )
+}
+
+pub async fn web_refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_web_origin(&state, &headers, &request_id)?;
+    let (database, auth) = services(&state, &request_id)?;
+    if !auth.allow_auth_request(
+        AuthOperation::WebRefresh,
+        &auth_rate_limit_key(&headers, "web-refresh"),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!(
+            "web_refresh:{}",
+            auth_rate_limit_key(&headers, "web-refresh")
+        ),
+        &request_id,
+    )
+    .await?;
+    let refresh_token = cookie_value(&headers, WEB_REFRESH_COOKIE)
+        .ok_or_else(|| ApiError::authentication(request_id.clone()))?;
+    let opaque = auth
+        .issue_refresh_token()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let replacement = NewRefreshToken {
+        token_hash: opaque.hash,
+        family_id: Uuid::new_v4(),
+        expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
+    };
+    let session = database
+        .rotate_refresh_token_for_role(
+            &opaque_token_hash(&refresh_token),
+            &replacement,
+            "user",
+            &request_id,
+        )
+        .await
+        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    web_token_response(
+        auth,
+        &session.user,
+        session.device_id,
+        &opaque.raw,
+        &request_id,
+    )
+}
+
+// 通过刷新 Cookie 定位并撤销设备会话；不要求有效 access token，重复注销可成功（§8.2）。
+pub async fn web_logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let request_id = request_id(&headers);
+    validate_web_origin(&state, &headers, &request_id)?;
+    let (database, auth) = services(&state, &request_id)?;
+    if !auth.allow_auth_request(
+        AuthOperation::WebLogout,
+        &auth_rate_limit_key(&headers, "web-logout"),
+    ) {
+        return Err(ApiError::rate_limited(request_id));
+    }
+    enforce_shared_rate_limit(
+        database,
+        &format!("web_logout:{}", auth_rate_limit_key(&headers, "web-logout")),
+        &request_id,
+    )
+    .await?;
+    if let Some(refresh_token) = cookie_value(&headers, WEB_REFRESH_COOKIE) {
+        database
+            .logout_device_by_refresh_token(&opaque_token_hash(&refresh_token), &request_id)
+            .await
+            .map_err(|error| map_persistence(error, request_id.clone()))?;
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        web_refresh_cookie_header("", 0, &request_id)?,
+    );
+    Ok(response)
+}
+
 const REGISTER_ACCEPTED_MESSAGE: &str = "注册申请已提交，请等待管理员审核";
 
 pub async fn register(
@@ -2688,13 +2924,17 @@ fn admin_token_response(
 }
 
 fn refresh_token_from_cookie(headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, ADMIN_REFRESH_COOKIE)
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| {
             value.split(';').find_map(|part| {
-                let (name, token) = part.trim().split_once('=')?;
-                (name == ADMIN_REFRESH_COOKIE && !token.is_empty()).then(|| token.to_owned())
+                let (cookie_name, token) = part.trim().split_once('=')?;
+                (cookie_name == name && !token.is_empty()).then(|| token.to_owned())
             })
         })
 }
@@ -2757,12 +2997,64 @@ fn admin_refresh_cookie_header(
     HeaderValue::from_str(&value).map_err(|_| ApiError::internal(request_id.to_owned()))
 }
 
+// 浏览器刷新 Cookie（设计文档 §8.2）：HttpOnly、Strict、限定 /api/v1/web/auth 路径，
+// 不设置 Domain，Max-Age 跟随后端刷新期限；登出清理使用相同属性。
+fn web_refresh_cookie_header(
+    token: &str,
+    max_age_seconds: i64,
+    request_id: &str,
+) -> Result<HeaderValue, ApiError> {
+    let value = format!(
+        "{WEB_REFRESH_COOKIE}={token}; Max-Age={max_age_seconds}; Path=/api/v1/web/auth; HttpOnly; Secure; SameSite=Strict"
+    );
+    HeaderValue::from_str(&value).map_err(|_| ApiError::internal(request_id.to_owned()))
+}
+
+fn web_token_response(
+    auth: &AuthService,
+    user: &UserRecord,
+    device_id: Uuid,
+    refresh_token: &str,
+    request_id: &str,
+) -> Result<Response, ApiError> {
+    let access = auth
+        .issue_access_token(user.id, &user.role, device_id)
+        .map_err(|_| ApiError::internal(request_id.to_owned()))?;
+    let mut response = Json(WebTokenResponse {
+        access_token: access.token,
+        expires_in: access.expires_in,
+    })
+    .into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        web_refresh_cookie_header(refresh_token, auth.refresh_ttl_seconds(), request_id)?,
+    );
+    Ok(response)
+}
+
 fn validate_admin_origin(
     state: &AppState,
     headers: &HeaderMap,
     request_id: &str,
 ) -> Result<(), ApiError> {
-    let Some(expected) = state.admin_origin.as_deref() else {
+    validate_configured_origin(state.admin_origin.as_deref(), headers, request_id)
+}
+
+fn validate_web_origin(
+    state: &AppState,
+    headers: &HeaderMap,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    validate_configured_origin(state.web_origin.as_deref(), headers, request_id)
+}
+
+// 精确匹配允许的 Origin，并拒绝跨站 Fetch Metadata（sec-fetch-site: cross-site）。
+fn validate_configured_origin(
+    expected: Option<&str>,
+    headers: &HeaderMap,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    let Some(expected) = expected else {
         return Err(ApiError::internal(request_id.to_owned()));
     };
     let origin = headers

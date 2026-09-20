@@ -336,6 +336,126 @@ paths:
                 $ref: '#/components/schemas/RegistrationSettings'
         '408':
           $ref: '#/components/responses/RequestTimeout'
+  /api/v1/web/auth/login:
+    post:
+      operationId: webLogin
+      summary: Authenticate a web user and set the refresh cookie
+      description: Browser session login for role=user accounts. Returns an
+        access token in the body and sets the HttpOnly Secure SameSite=Strict
+        tasktips_web_refresh cookie scoped to /api/v1/web/auth. Requires an
+        exact Origin match and rejects cross-site fetch metadata.
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Web access token and refresh cookie.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebTokenResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/web/auth/invitations/activate:
+    post:
+      operationId: webActivateInvitation
+      summary: Activate an invited account from the browser
+      description: Same semantics as /api/v1/auth/invitations/activate, but
+        the issued refresh token is delivered through the tasktips_web_refresh
+        cookie instead of the response body. Requires an exact Origin match
+        and rejects cross-site fetch metadata.
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationActivationRequest'
+      responses:
+        '200':
+          description: Activated account with web access token and refresh cookie.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebTokenResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/web/auth/refresh:
+    post:
+      operationId: webRefreshToken
+      summary: Rotate the web refresh cookie
+      description: Reads the tasktips_web_refresh cookie, rotates it, and
+        returns a new access token. No JSON credentials are accepted.
+        Requires an exact Origin match and rejects cross-site fetch metadata.
+      tags: [Authentication]
+      security: []
+      responses:
+        '200':
+          description: Rotated web access token and refresh cookie.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebTokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/web/auth/logout:
+    post:
+      operationId: webLogout
+      summary: Revoke the web device session through the refresh cookie
+      description: Locates the device session via the refresh cookie without
+        requiring a valid access token, revokes it, and clears the cookie.
+        Repeated logout succeeds; a missing or stale cookie still returns 204.
+      tags: [Authentication]
+      security: []
+      responses:
+        '204':
+          description: The web device session was revoked and the cookie cleared.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestTimeout'
   /api/v1/me:
     get:
       operationId: getCurrentUser
@@ -2402,6 +2522,16 @@ components:
         accessToken:
           type: string
         refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+          minimum: 1
+    WebTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [accessToken, expiresIn]
+      properties:
+        accessToken:
           type: string
         expiresIn:
           type: integer
