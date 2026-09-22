@@ -28,10 +28,13 @@
    必须让该 uid 可读：root 下执行 setup.sh 会自动 `chown 65532`；非 root 用户
    会回退为 644 并打印警告。
 3. 检查 `deploy/.env`：`TASKTIPS_PUBLIC_BASE_URL` 须与 Caddy 公开域名一致；
-   `TASKTIPS_ADMIN_ORIGIN` 须精确匹配管理后台浏览器 origin（含协议、无尾斜杠）。
-4. 校验并启动（默认拉取 Docker Hub 预构建镜像 `ke4nec/tasktips-cloud`（后端）
-   和 `ke4nec/tasktips-cloud-admin`（管理后台），可用 `TASKTIPS_BACKEND_IMAGE` /
-   `TASKTIPS_ADMIN_IMAGE` 覆盖）：
+   `TASKTIPS_ADMIN_ORIGIN` / `TASKTIPS_WEB_ORIGIN` 须精确匹配管理后台 / Web
+   前端浏览器的 origin（含协议、无尾斜杠）。同源部署时 Web 前端在主域 `/app/`，
+   两个 origin 都跟随主域；独立域名才需要手工区分。
+4. 校验并启动（默认拉取 Docker Hub 预构建镜像 `ke4nec/tasktips-cloud`（后端）、
+   `ke4nec/tasktips-cloud-admin`（管理后台）和 `ke4nec/tasktips-web`（Web 前端，
+   同源部署在 `/app/`），可用 `TASKTIPS_BACKEND_IMAGE` /
+   `TASKTIPS_ADMIN_IMAGE` / `TASKTIPS_WEB_IMAGE` 覆盖）：
 
    ```sh
    docker compose --env-file deploy/.env -f deploy/compose.yaml config
@@ -42,7 +45,9 @@
 
    离线或定制构建时把 `pull` 换成 `up --build -d`，Compose 会改用
    `deploy/Dockerfile`（后端：API、worker、迁移）和 `deploy/Dockerfile.admin`
-  （管理后台）在本地构建同样的两个镜像。
+  （管理后台）在本地构建同样的两个镜像；Web 前端镜像源码在兄弟仓库
+  `../tasktips-web`，Compose 始终拉取（离线时先用该仓库的
+  `deploy/Dockerfile.web` 构建并打上 `TASKTIPS_WEB_IMAGE` 指定的标签）。
 
 ## SSL 开关与密钥找回
 
@@ -62,13 +67,13 @@ HTTP，不申请证书。需要 HTTPS 时把它改为 `https://你的域名`（D
 
 ## 镜像发布
 
-`.github/workflows/docker-publish.yml` 在 `master` 分支推送和 `v*` 标签推送时自动构建后端、admin 两个镜像并推送到 Docker Hub（`master` 发布 `latest`/`master`/`sha-<commit>`，`vX.Y.Z` 额外发布 `X.Y.Z`/`X.Y`）；Pull Request 只做构建验证，不推送。
+`.github/workflows/docker-publish.yml` 在 `master` 分支推送和 `v*` 标签推送时自动构建后端、admin 两个镜像并推送到 Docker Hub（`master` 发布 `latest`/`master`/`sha-<commit>`，`vX.Y.Z` 额外发布 `X.Y.Z`/`X.Y`）；Pull Request 只做构建验证，不推送。Web 前端镜像由兄弟仓库 `tasktips-web` 的同名 workflow 独立构建发布。
 
 发布前需要在仓库设置中配置 Secrets `DOCKERHUB_USERNAME`（Docker Hub 账号或组织名）和 `DOCKERHUB_TOKEN`（Access Token，不要用真实密码）；镜像仓库默认为 `ke4nec/tasktips-cloud`（后端）和 `ke4nec/tasktips-cloud-admin`（管理后台），可用 Actions 变量 `DOCKERHUB_BACKEND_REPOSITORY` / `DOCKERHUB_ADMIN_REPOSITORY` 覆盖。
 
 构建使用 BuildKit Actions 缓存（`type=gha,mode=max`）复用 cargo/npm 层加速后续构建，不上传任何 artifact；任务结束时会裁剪 builder 缓存和悬空镜像，避免 runner 磁盘被中间产物占满。
 
-`migrate` 成功前 API、worker 和 admin 不会启动。Caddy 是唯一公网入口；PostgreSQL、RustFS、`/metrics` 和容器内部端口不应映射到公网。
+`migrate` 成功前 API、worker、admin 和 web 不会启动。Caddy 是唯一公网入口（`/app/` Web 前端、`/admin/` 管理后台、`/api/` 后端，根路径重定向 `/app/`）；PostgreSQL、RustFS、`/metrics` 和容器内部端口不应映射到公网。
 
 当前开发阶段的数据库结构收敛在 `migrations/0001_init.sql`。首次部署或重建空库由
 `tasktips-api migrate` 执行该脚本；已有完整的旧分段迁移结构会被识别为同一最终结构并继续使用，
@@ -108,8 +113,8 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml run --rm tasktips-a
 
 1. 阅读发布说明，确认迁移是 forward-only，并先完成备份。
 2. 拉取固定版本代码，执行 `docker compose ... config` 和镜像构建。
-3. `docker compose ... up --build -d` 会先运行迁移，再滚动启动 API、worker 和 admin。
-4. 检查 `/health/ready`、`/api/v1/openapi.yaml`（以及兼容的 `/openapi.yaml`）、管理员登录、bootstrap、payload 下载和 `/metrics` 内部响应。管理员登录、refresh、logout 和危险操作必须使用 `/api/v1/admin/*` 路径；发布后现有管理员会话需要重新登录。
+3. `docker compose ... up --build -d` 会先运行迁移，再滚动启动 API、worker、admin 和 web。
+4. 检查 `/health/ready`、`/api/v1/openapi.yaml`（以及兼容的 `/openapi.yaml`）、管理员登录、`/app/` Web 前端加载、bootstrap、payload 下载和 `/metrics` 内部响应。管理员登录、refresh、logout 和危险操作必须使用 `/api/v1/admin/*` 路径；发布后现有管理员会话需要重新登录。
 
 不要跳过迁移、回滚数据库 schema 或复用旧 JWT/cursor secret。应用回滚前必须确认新 schema 向后兼容；破坏性 API 使用新 `/api/vN` 路径。
 

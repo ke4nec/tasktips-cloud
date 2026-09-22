@@ -1,10 +1,18 @@
 {$TASKTIPS_PUBLIC_BASE_URL} {
   encode zstd gzip
 
+  redir / /app/ 308
+  redir /app /app/ 308
   redir /admin /admin/ 308
 
   handle_path /admin/* {
     reverse_proxy tasktips-admin:8080
+  }
+
+  # Web 前端镜像的 nginx 自带 /app/ 基座（history fallback 也限在其内），
+  # 因此这里保留前缀直接转发，与 /admin/ 的去前缀不同。
+  handle /app/* {
+    reverse_proxy tasktips-web:8080
   }
 
   handle /api/* {

@@ -86,7 +86,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml ps
 ```
 
 `quickstart.sh` 会从 `env.example` 生成 git-ignored 的 `.env`（已存在不覆盖）、
-补齐 JWT 私钥并 `up -d` 全部 7 个服务。数据库 DSN 由 Compose 用服务名自动
+补齐 JWT 私钥并 `up -d` 全部 8 个服务。数据库 DSN 由 Compose 用服务名自动
 组装，无需手写。`migrate` 会自动先跑；RustFS bucket 由 API 自动建。
 公网生产必须用 `bash deploy/setup.sh --domain https://example.com --force`
 换成强随机密钥，不要把默认密钥暴露到公网。
@@ -97,10 +97,13 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml ps
 docker compose run --rm tasktips-api tasktips-api admin create --email admin@example.com
 ```
 
-然后浏览器打开 `https://example.com/admin/`（或 `http://localhost/admin/`）登录。
+然后浏览器打开 `https://example.com/admin/`（管理后台）或 `https://example.com/app/`
+（Web 前端；本地试用为 `http://localhost/admin/`、`http://localhost/app/`）。
 默认使用 Docker Hub 预构建镜像（后端 `ke4nec/tasktips-cloud`、管理后台
-`ke4nec/tasktips-cloud-admin`，可用 `TASKTIPS_BACKEND_IMAGE` /
-`TASKTIPS_ADMIN_IMAGE` 覆盖）；本地构建改用 `docker compose up --build`。生产
+`ke4nec/tasktips-cloud-admin`、Web 前端 `ke4nec/tasktips-web`，可用
+`TASKTIPS_BACKEND_IMAGE` / `TASKTIPS_ADMIN_IMAGE` / `TASKTIPS_WEB_IMAGE`
+覆盖）；后端与管理后台可本地构建（`docker compose up --build`），Web 前端
+源码在兄弟仓库 `../tasktips-web`，镜像缺失时始终拉取。生产
 部署、HTTPS 开关、备份与发布流程见 [`docs/self-hosting.md`](docs/self-hosting.md)。
 
 不得把真实密码、JWT 私钥或 RustFS 凭据提交到 Git。

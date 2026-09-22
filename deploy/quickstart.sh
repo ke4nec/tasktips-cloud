@@ -6,7 +6,7 @@
 # 实际执行（都在 deploy/ 目录下）：
 #   1. 没有 .env 就从 env.example 复制（含本地默认用户名/密码/密钥，可自行修改）；
 #   2. 调 setup.sh 补齐 JWT 私钥（幂等，已存在不覆盖；--domain 会同步写 PUBLIC_BASE_URL）；
-#   3. docker compose up -d 拉起全部 7 个服务（migrate 自动先跑）。
+#   3. docker compose up -d 拉起全部 8 个服务（migrate 自动先跑）。
 #
 # 改配置：编辑 .env 对应行后 `docker compose --env-file .env -f compose.yaml up -d` 重建即可。
 # 公网生产：不要用默认密钥，改跑 `bash deploy/setup.sh --domain https://example.com --force`

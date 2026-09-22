@@ -23,7 +23,9 @@ x-tasktips-environment: &tasktips-environment
   TASKTIPS_ARGON2_TIME_COST: ${TASKTIPS_ARGON2_TIME_COST:-2}
   TASKTIPS_ARGON2_PARALLELISM: ${TASKTIPS_ARGON2_PARALLELISM:-1}
   TASKTIPS_ADMIN_ORIGIN: ${TASKTIPS_ADMIN_ORIGIN:-http://localhost}
-  TASKTIPS_WEB_ORIGIN: ${TASKTIPS_WEB_ORIGIN:-}
+  # Web 前端与 API 同源部署在 /app/（TASKTIPS_WEB_ORIGIN 默认跟随主域；
+  # 独立域名部署时用 setup.sh --web-origin 显式指定）。
+  TASKTIPS_WEB_ORIGIN: ${TASKTIPS_WEB_ORIGIN:-http://localhost}
   TASKTIPS_MAX_PUSH_OBJECTS: ${TASKTIPS_MAX_PUSH_OBJECTS:-100}
   TASKTIPS_MAX_PUSH_JSON_BYTES: ${TASKTIPS_MAX_PUSH_JSON_BYTES:-2097152}
   TASKTIPS_UPLOAD_TEMP_DIR: ${TASKTIPS_UPLOAD_TEMP_DIR:-/tmp/tasktips-uploads}
@@ -71,7 +73,8 @@ services:
     # Default tags track the release version (0.1.0): bump them together with
     # Cargo.toml, admin/package.json, contracts/openapi.yaml and the
     # Dockerfiles' APP_VERSION. Override with TASKTIPS_BACKEND_IMAGE when a
-    # different tag (e.g. master) is needed.
+    # different tag is needed. Branch pushes publish only `latest`; version
+    # tags come from `vX.Y.Z` release tags (docker-publish.yml).
     image: ${TASKTIPS_BACKEND_IMAGE:-ke4nec/tasktips-cloud:0.1.0}
     build:
       context: ..
@@ -135,6 +138,30 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  tasktips-web:
+    # Browser web client image, published from the sibling repo
+    # ../tasktips-web (deploy/Dockerfile.web there). That repo has not cut a
+    # v* release yet, so unlike the backend/admin images there is no 0.1.0
+    # tag to pin; the default tracks latest until it publishes one. No
+    # build: section here on purpose — the source lives outside this repo,
+    # so a missing image must be pulled, never built. For a local build run
+    # `docker build -t ke4nec/tasktips-web:latest ../tasktips-web -f
+    # ../tasktips-web/deploy/Dockerfile.web` (or point TASKTIPS_WEB_IMAGE at
+    # your own tag).
+    image: ${TASKTIPS_WEB_IMAGE:-ke4nec/tasktips-web:latest}
+    # The image's nginx serves the app under /app/ (Caddy keeps the prefix).
+    # It listens on IPv4 only, so probe 127.0.0.1 instead of localhost.
+    healthcheck:
+      test:
+        [CMD, wget, --quiet, --tries=1, --spider, http://127.0.0.1:8080/app/]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      tasktips-api:
+        condition: service_healthy
+    restart: unless-stopped
+
   caddy:
     image: caddy:2.11.4-alpine
     environment:
@@ -151,6 +178,8 @@ services:
       tasktips-api:
         condition: service_healthy
       tasktips-admin:
+        condition: service_healthy
+      tasktips-web:
         condition: service_healthy
     restart: unless-stopped
 
