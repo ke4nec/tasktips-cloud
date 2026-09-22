@@ -7,8 +7,8 @@ name: Docker Publish
 # without publishing anything.
 #
 # Triggers (per image):
-#   - push to master          -> publishes `latest`, `master`, `sha-<commit>`
-#   - push of a `v*` tag      -> publishes `vX.Y.Z`, `X.Y.Z`, `X.Y`, `sha-<commit>`
+#   - push to master          -> publishes `latest` only
+#   - push of a `v*` tag      -> publishes `vX.Y.Z`, `X.Y.Z`, `X.Y`
 #   - pull_request / dispatch -> build-only validation, nothing is pushed
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
@@ -107,13 +107,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.repo.outputs.name }}
+          # Branch pushes publish only the floating `latest`; version tags
+          # come exclusively from `vX.Y.Z` release tags (no `master`/`sha-*`
+          # aliases — pin deployments to a release tag instead). The pr-N tag
+          # only names build-only validation images; PRs never push.
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha
+            type=ref,event=pr
           labels: |
             org.opencontainers.image.title=TaskTips Cloud ${{ matrix.target }}
             org.opencontainers.image.version=${{ steps.release-version.outputs.app_version }}

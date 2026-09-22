@@ -67,7 +67,7 @@ HTTP，不申请证书。需要 HTTPS 时把它改为 `https://你的域名`（D
 
 ## 镜像发布
 
-`.github/workflows/docker-publish.yml` 在 `master` 分支推送和 `v*` 标签推送时自动构建后端、admin 两个镜像并推送到 Docker Hub（`master` 发布 `latest`/`master`/`sha-<commit>`，`vX.Y.Z` 额外发布 `X.Y.Z`/`X.Y`）；Pull Request 只做构建验证，不推送。Web 前端镜像由兄弟仓库 `tasktips-web` 的同名 workflow 独立构建发布。
+`.github/workflows/docker-publish.yml` 在 `master` 分支推送和 `v*` 标签推送时自动构建后端、admin 两个镜像并推送到 Docker Hub（`master` 推送仅发布 `latest`；`vX.Y.Z` 标签发布 `vX.Y.Z`/`X.Y.Z`/`X.Y`，不再发布 `master`/`sha-*` 浮动别名，固定版本部署请用 release 标签）；Pull Request 只做构建验证，不推送。Web 前端镜像由兄弟仓库 `tasktips-web` 的同名 workflow 按相同规则独立构建发布。
 
 发布前需要在仓库设置中配置 Secrets `DOCKERHUB_USERNAME`（Docker Hub 账号或组织名）和 `DOCKERHUB_TOKEN`（Access Token，不要用真实密码）；镜像仓库默认为 `ke4nec/tasktips-cloud`（后端）和 `ke4nec/tasktips-cloud-admin`（管理后台），可用 Actions 变量 `DOCKERHUB_BACKEND_REPOSITORY` / `DOCKERHUB_ADMIN_REPOSITORY` 覆盖。
 
