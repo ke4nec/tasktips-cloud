@@ -2478,6 +2478,18 @@ pub async fn update_registration_settings(
     Ok(Json(RegistrationSettingsResponse { enabled }))
 }
 
+/// Escapes LIKE pattern metacharacters so admin search terms match literally.
+fn like_pattern_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
 pub async fn admin_list_all_projects(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2495,7 +2507,12 @@ pub async fn admin_list_all_projects(
     }
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
     let (projects, has_more) = database
-        .admin_list_all_projects_page(claims.sub, limit, offset, search)
+        .admin_list_all_projects_page(
+            claims.sub,
+            limit,
+            offset,
+            search.map(like_pattern_literal).as_deref(),
+        )
         .await
         .map_err(|error| map_persistence(error, request_id))?;
     let next_offset = has_more.then_some(offset.saturating_add(limit));
@@ -3585,7 +3602,15 @@ pub fn request_id(headers: &HeaderMap) -> String {
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::auth_rate_limit_key;
+    use super::{auth_rate_limit_key, like_pattern_literal};
+
+    #[test]
+    fn like_pattern_literal_escapes_wildcards() {
+        assert_eq!(like_pattern_literal("50%"), "50\\%");
+        assert_eq!(like_pattern_literal("a_b"), "a\\_b");
+        assert_eq!(like_pattern_literal("back\\slash"), "back\\\\slash");
+        assert_eq!(like_pattern_literal("plain-42"), "plain-42");
+    }
 
     #[test]
     fn auth_rate_limit_key_normalizes_client_ip_and_hashes_identity() {

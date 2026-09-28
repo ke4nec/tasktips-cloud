@@ -1,15 +1,20 @@
-//! 登录暴力破解防护回归测试：per-IP 预算防"换邮箱绕过"（密码喷洒）。
+//! 登录暴力破解防护回归测试：per-IP 预算防"换邮箱绕过"（密码喷洒），
+//! 以及管理端项目搜索的 LIKE 通配符字面量化。
 //!
 //! 需要数据库：未设置 `TASKTIPS_DATABASE_URL` 时跳过（CI 中必须提供）。
 
 use axum::{
     Router,
-    body::Body,
+    body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
 use ed25519_dalek::{SigningKey, pkcs8::EncodePrivateKey};
-use serde_json::json;
-use tasktips_api::{AppState, Readiness, auth::AuthService, build_application_router};
+use serde_json::{Value, json};
+use tasktips_api::{
+    AppState, Readiness,
+    auth::{AuthService, hash_password},
+    build_application_router,
+};
 use tasktips_persistence::Persistence;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -100,6 +105,80 @@ async fn spray_login(app: &Router, email: &str) -> StatusCode {
     response.status()
 }
 
+#[tokio::test]
+async fn admin_project_search_matches_percent_literally() {
+    let Some((app, admin_email)) = search_app().await else {
+        assert!(std::env::var_os("CI").is_none());
+        eprintln!("auth_rate_limit skipped: TASKTIPS_DATABASE_URL is not set");
+        return;
+    };
+
+    // 造一个名字含字面 % 的项目：admin 建用户 → 用户登录 → 建项目。
+    let admin_token = admin_login(&app, &admin_email).await;
+    let user_email = format!("search-user-{}@example.test", Uuid::new_v4());
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/admin/users")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, "https://admin.example.test")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::from(
+            json!({"email": user_email, "password": "user-password-123"}).to_string(),
+        ))
+        .expect("create user request should build");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router should respond");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let user_token = user_login(&app, &user_email).await;
+    let project_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/projects")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {user_token}"))
+        .body(Body::from(
+            json!({"name": format!("discount-50%-{}", &user_email[..8])}).to_string(),
+        ))
+        .expect("project request should build");
+    let response = app
+        .clone()
+        .oneshot(project_request)
+        .await
+        .expect("router should respond");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // 搜索 "%" 只能命中名字含字面 % 的项目，而不是全部项目。
+    let request = Request::builder()
+        .uri("/api/v1/admin/projects?search=%25")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .body(Body::empty())
+        .expect("search request should build");
+    let response = app.oneshot(request).await.expect("router should respond");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("search body should read");
+    let items = serde_json::from_slice::<Value>(&body)
+        .expect("search body should be json")
+        .get("items")
+        .cloned()
+        .unwrap_or_default();
+    let names: Vec<&str> = items
+        .as_array()
+        .expect("items should be an array")
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .collect();
+    assert!(!names.is_empty(), "literal-percent project should match");
+    assert!(
+        names.iter().all(|name| name.contains('%')),
+        "all matches must contain a literal percent, got {names:?}"
+    );
+}
+
 async fn login_app() -> Option<Router> {
     let database_url = std::env::var("TASKTIPS_DATABASE_URL").ok()?;
     let persistence = Persistence::connect(&database_url)
@@ -114,6 +193,99 @@ async fn login_app() -> Option<Router> {
         Some(persistence),
         Some(test_auth()),
     )))
+}
+
+async fn search_app() -> Option<(Router, String)> {
+    let database_url = std::env::var("TASKTIPS_DATABASE_URL").ok()?;
+    let persistence = Persistence::connect(&database_url)
+        .await
+        .expect("test database should be reachable");
+    persistence
+        .migrate()
+        .await
+        .expect("migrations should apply");
+    let app = build_application_router(
+        AppState::new(
+            Readiness::unavailable(),
+            Some(persistence.clone()),
+            Some(test_auth()),
+        )
+        .with_admin_origin("https://admin.example.test"),
+    );
+    let admin_email = format!("search-admin-{}@example.test", Uuid::new_v4());
+    persistence
+        .create_initial_admin(
+            &admin_email,
+            &admin_email,
+            &hash_password("admin-password-123").expect("password should hash"),
+        )
+        .await
+        .expect("admin should be created");
+    Some((app, admin_email))
+}
+
+async fn admin_login(app: &Router, email: &str) -> String {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/admin/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, "https://admin.example.test")
+        .body(Body::from(
+            json!({
+                "email": email,
+                "password": "admin-password-123",
+                "deviceId": Uuid::new_v4()
+            })
+            .to_string(),
+        ))
+        .expect("admin login request should build");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router should respond");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("admin login body should read");
+    serde_json::from_slice::<Value>(&body).expect("admin login body should be json")["accessToken"]
+        .as_str()
+        .expect("accessToken should exist")
+        .to_owned()
+}
+
+async fn user_login(app: &Router, email: &str) -> String {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-forwarded-for", "203.0.113.9")
+        .body(Body::from(
+            json!({
+                "email": email,
+                "password": "user-password-123",
+                "deviceId": Uuid::new_v4()
+            })
+            .to_string(),
+        ))
+        .expect("user login request should build");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router should respond");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "user login should succeed"
+    );
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("user login body should read");
+    serde_json::from_slice::<Value>(&body).expect("user login body should be json")["accessToken"]
+        .as_str()
+        .expect("accessToken should exist")
+        .to_owned()
 }
 
 fn test_auth() -> AuthService {

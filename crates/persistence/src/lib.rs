@@ -4699,7 +4699,9 @@ impl Persistence {
             "SELECT id, owner_user_id, name, generation, status::text AS status, \
                     change_seq AS change_sequence, created_at, updated_at \
              FROM admin_project_metadata \
-             WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%' OR id::text ILIKE '%' || $1 || '%') \
+             WHERE ($1::text IS NULL \
+                    OR name ILIKE '%' || $1 || '%' ESCAPE '\\' \
+                    OR id::text ILIKE '%' || $1 || '%' ESCAPE '\\') \
              ORDER BY created_at, id LIMIT $2 OFFSET $3",
         )
         .bind(search)
