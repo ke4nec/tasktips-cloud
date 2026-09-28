@@ -205,21 +205,27 @@ pub struct NewSyncRevision {
 }
 
 #[derive(Clone, Debug, Serialize)]
+// 枚举级 rename_all 只作用于变体名（status 值）；变体字段名必须逐个声明
+// camelCase，否则响应字段（changed_at 等）违反合同的 camelCase 约定。
 #[serde(rename_all = "camelCase", tag = "status")]
 pub enum PushItemResult {
+    #[serde(rename_all = "camelCase")]
     Applied {
         kind: ObjectKind,
         id: String,
         revision: i64,
         change_sequence: i64,
+        #[serde(with = "time::serde::rfc3339")]
         changed_at: OffsetDateTime,
     },
+    #[serde(rename_all = "camelCase")]
     Conflict {
         kind: ObjectKind,
         id: String,
         expected_revision: Option<i64>,
         actual_revision: Option<i64>,
     },
+    #[serde(rename_all = "camelCase")]
     Rejected {
         kind: ObjectKind,
         id: String,
@@ -5793,7 +5799,7 @@ pub fn refresh_expiry(ttl_seconds: i64) -> OffsetDateTime {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceRecord, ProjectRecord};
+    use super::{DeviceRecord, ProjectRecord, PushItemResult};
     use time::OffsetDateTime;
     use uuid::Uuid;
 
@@ -5847,6 +5853,27 @@ mod tests {
         assert!(
             value["lastLoginAt"].is_null(),
             "None must serialize as null"
+        );
+    }
+
+    /// push 响应的 results 条目同样进入严格 ISO 8601 客户端的解析路径，
+    /// 枚举变体字段必须与结构体遵循同一 RFC 3339 约定。
+    #[test]
+    fn push_item_results_serialize_timestamps_as_rfc3339() {
+        let result = PushItemResult::Applied {
+            kind: super::ObjectKind::Todo,
+            id: "01H8Z8Z8Z8Z8Z8Z8Z8Z8Z8Z8Z8".to_owned(),
+            revision: 1,
+            change_sequence: 0,
+            changed_at: OffsetDateTime::from_unix_timestamp(1_704_067_200).expect("valid instant"),
+        };
+        let value = serde_json::to_value(&result).expect("push result should serialize");
+        let serialized = value["changedAt"]
+            .as_str()
+            .expect("changedAt should be a camelCase string");
+        assert!(
+            serialized.contains('T') && !serialized.contains(' '),
+            "push result changedAt must be RFC 3339, got {serialized}"
         );
     }
 }
