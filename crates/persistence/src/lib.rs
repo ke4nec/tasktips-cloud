@@ -71,7 +71,9 @@ pub struct UserRecord {
     pub password_hash: String,
     pub role: String,
     pub status: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_login_at: Option<OffsetDateTime>,
 }
 
@@ -84,7 +86,9 @@ pub struct ProjectRecord {
     pub generation: i64,
     pub status: String,
     pub change_sequence: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 
@@ -96,11 +100,17 @@ pub struct DeviceRecord {
     pub display_name: String,
     pub platform: String,
     pub app_version: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_seen_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_login_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_pull_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_push_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub revoked_at: Option<OffsetDateTime>,
 }
 
@@ -131,6 +141,7 @@ pub struct NewInvitation {
 pub struct InvitationRecord {
     pub id: Uuid,
     pub email: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
 }
 
@@ -139,9 +150,13 @@ pub struct InvitationRecord {
 pub struct AdminInvitationRecord {
     pub id: Uuid,
     pub email: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub used_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub revoked_at: Option<OffsetDateTime>,
     pub status: String,
 }
@@ -171,6 +186,7 @@ pub struct SyncRecord {
     pub revision: i64,
     pub base_revision: Option<i64>,
     pub content_hash: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub changed_at: OffsetDateTime,
     pub device_id: Uuid,
     pub tombstone: bool,
@@ -257,6 +273,7 @@ pub struct SnapshotRecord {
     pub manifest_hash: String,
     pub status: String,
     pub created_by: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(skip_serializing)]
     pub manifest_bucket: String,
@@ -282,8 +299,11 @@ pub struct RestoreJobRecord {
     pub restored_objects: i32,
     pub restored_tombstones: i32,
     pub error_code: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub started_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub finished_at: Option<OffsetDateTime>,
     #[sqlx(default)]
     #[serde(skip_serializing)]
@@ -293,6 +313,7 @@ pub struct RestoreJobRecord {
     #[sqlx(default)]
     pub attempts: i32,
     #[sqlx(default)]
+    #[serde(with = "time::serde::rfc3339::option")]
     pub run_after: Option<OffsetDateTime>,
 }
 
@@ -303,6 +324,7 @@ pub struct AdminHistoryRecord {
     pub object_id: String,
     pub revision: i64,
     pub base_revision: Option<i64>,
+    #[serde(with = "time::serde::rfc3339")]
     pub changed_at: OffsetDateTime,
     pub device_id: Uuid,
     pub tombstone: bool,
@@ -321,6 +343,7 @@ pub struct SyncAttemptRecord {
     pub error_code: Option<String>,
     pub item_count: i32,
     pub latency_ms: Option<i32>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -331,6 +354,7 @@ pub struct AdminOperationRecord {
     pub operation: String,
     pub status: String,
     pub attempts: i32,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub run_after: Option<OffsetDateTime>,
     pub cancel_requested: bool,
     pub project_id: Option<Uuid>,
@@ -338,12 +362,14 @@ pub struct AdminOperationRecord {
     pub item_count: Option<i32>,
     pub latency_ms: Option<i32>,
     pub error_code: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminTrendPoint {
+    #[serde(with = "time::serde::rfc3339")]
     pub day: OffsetDateTime,
     pub attempts: i64,
     pub succeeded: i64,
@@ -362,6 +388,7 @@ pub struct AuditEventRecord {
     pub action: String,
     pub metadata: serde_json::Value,
     pub request_id: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -387,10 +414,14 @@ pub struct JobRecord {
     pub project_id: Option<Uuid>,
     pub status: String,
     pub attempts: i32,
+    #[serde(with = "time::serde::rfc3339")]
     pub run_after: OffsetDateTime,
     pub error_code: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub started_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub finished_at: Option<OffsetDateTime>,
     #[sqlx(default)]
     #[serde(skip_serializing)]
@@ -5758,4 +5789,64 @@ pub fn invitation_expiry() -> OffsetDateTime {
 #[must_use]
 pub fn refresh_expiry(ttl_seconds: i64) -> OffsetDateTime {
     OffsetDateTime::now_utc() + Duration::seconds(ttl_seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceRecord, ProjectRecord};
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    /// API 合同（OpenAPI `format: date-time`）要求 RFC 3339：严格 ISO 8601 客户端
+    /// （Dart `DateTime.parse`、`Date`）无法解析 time 默认的空格分隔格式。
+    #[test]
+    fn api_records_serialize_timestamps_as_rfc3339() {
+        let instant = OffsetDateTime::from_unix_timestamp(1_704_067_200).expect("valid instant");
+        let project = ProjectRecord {
+            id: Uuid::nil(),
+            owner_user_id: Uuid::nil(),
+            name: "format-probe".to_owned(),
+            generation: 1,
+            status: "active".to_owned(),
+            change_sequence: 0,
+            created_at: instant,
+            updated_at: instant,
+        };
+        let value = serde_json::to_value(&project).expect("project should serialize");
+        for field in ["createdAt", "updatedAt"] {
+            let serialized = value[field].as_str().expect("timestamp should be a string");
+            assert!(
+                serialized.strip_suffix('Z').unwrap_or(serialized).len()
+                    >= "2024-01-01T00:00:00".len()
+                    && serialized.contains('T')
+                    && !serialized.contains(' '),
+                "{field} must be RFC 3339, got {serialized}"
+            );
+        }
+
+        let device = DeviceRecord {
+            id: Uuid::nil(),
+            owner_user_id: Uuid::nil(),
+            display_name: "probe".to_owned(),
+            platform: "test".to_owned(),
+            app_version: "0".to_owned(),
+            created_at: instant,
+            last_seen_at: Some(instant),
+            last_login_at: None,
+            last_pull_at: None,
+            last_push_at: None,
+            revoked_at: None,
+        };
+        let value = serde_json::to_value(&device).expect("device should serialize");
+        assert!(
+            value["lastSeenAt"]
+                .as_str()
+                .is_some_and(|seen| seen.contains('T')),
+            "Some(instant) must serialize as RFC 3339"
+        );
+        assert!(
+            value["lastLoginAt"].is_null(),
+            "None must serialize as null"
+        );
+    }
 }

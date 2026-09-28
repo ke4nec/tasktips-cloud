@@ -128,6 +128,7 @@ pub struct SyncObjectMetadata {
     pub revision: u64,
     pub base_revision: Option<u64>,
     pub content_hash: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
     pub device_id: Uuid,
 }
@@ -139,6 +140,7 @@ pub struct SyncTombstoneMetadata {
     pub id: String,
     pub revision: u64,
     pub base_revision: Option<u64>,
+    #[serde(with = "time::serde::rfc3339")]
     pub deleted_at: time::OffsetDateTime,
     pub device_id: Uuid,
 }

@@ -380,6 +380,7 @@ pub struct CreateInvitationResponse {
     id: Uuid,
     email: String,
     invitation_token: String,
+    #[serde(with = "time::serde::rfc3339")]
     expires_at: time::OffsetDateTime,
 }
 
@@ -436,6 +437,7 @@ pub struct PushObject {
     revision: i64,
     base_revision: Option<i64>,
     content_hash: String,
+    #[serde(with = "time::serde::rfc3339")]
     updated_at: time::OffsetDateTime,
     device_id: Uuid,
 }
@@ -447,6 +449,7 @@ pub struct PushTombstone {
     id: String,
     revision: i64,
     base_revision: Option<i64>,
+    #[serde(with = "time::serde::rfc3339")]
     deleted_at: time::OffsetDateTime,
     device_id: Uuid,
 }
@@ -3285,6 +3288,15 @@ fn verify_cursor(
     Ok(claims)
 }
 
+/// Formats an instant as RFC 3339, matching the `OpenAPI` `date-time` contract.
+/// Clients parse timestamps with strict ISO 8601 parsers (Dart, Date), so the
+/// default `time` human-readable format is not acceptable.
+fn rfc3339(value: time::OffsetDateTime) -> String {
+    value
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
 fn sync_record_json(record: &SyncRecord) -> serde_json::Value {
     if record.tombstone {
         serde_json::json!({
@@ -3293,7 +3305,7 @@ fn sync_record_json(record: &SyncRecord) -> serde_json::Value {
             "id": record.id,
             "revision": record.revision,
             "baseRevision": record.base_revision,
-            "deletedAt": record.changed_at,
+            "deletedAt": rfc3339(record.changed_at),
             "deviceId": record.device_id,
             "changeSequence": record.change_sequence
         })
@@ -3306,7 +3318,7 @@ fn sync_record_json(record: &SyncRecord) -> serde_json::Value {
             "revision": record.revision,
             "baseRevision": record.base_revision,
             "contentHash": record.content_hash,
-            "updatedAt": record.changed_at,
+            "updatedAt": rfc3339(record.changed_at),
             "deviceId": record.device_id,
             "changeSequence": record.change_sequence
         })

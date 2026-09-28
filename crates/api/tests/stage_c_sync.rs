@@ -632,7 +632,9 @@ async fn push_tombstone(
                 "id": TODO_ID,
                 "revision": revision,
                 "baseRevision": base_revision,
-                "deletedAt": OffsetDateTime::now_utc(),
+                "deletedAt": OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("rfc3339 formatting should succeed"),
                 "deviceId": device.device_id
             }]
         }),
@@ -680,7 +682,7 @@ fn object_push_body_for_id(
             "revision": revision,
             "baseRevision": base_revision,
             "contentHash": hash,
-            "updatedAt": OffsetDateTime::from_unix_timestamp(1_704_067_200).unwrap(),
+            "updatedAt": "2024-01-01T00:00:00Z",
             "deviceId": device.device_id
         }],
         "tombstones": []
