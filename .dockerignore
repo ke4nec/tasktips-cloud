@@ -11,6 +11,7 @@ admin/dist
 admin/node_modules
 coverage
 deploy/.env
+deploy/secrets
 target
 tmp
 *.key
