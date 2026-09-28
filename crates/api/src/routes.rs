@@ -1303,6 +1303,15 @@ pub async fn login(
     let email = normalize_email(&request.email)
         .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
     let (database, auth) = services(&state, &request_id)?;
+    enforce_login_ip_budget(
+        auth,
+        database,
+        AuthOperation::Login,
+        "login-ip",
+        &headers,
+        &request_id,
+    )
+    .await?;
     if !auth.allow_auth_request(AuthOperation::Login, &auth_rate_limit_key(&headers, &email)) {
         return Err(ApiError::rate_limited(request_id));
     }
@@ -1374,6 +1383,15 @@ pub async fn admin_login(
     let email = normalize_email(&request.email)
         .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
     let (database, auth) = services(&state, &request_id)?;
+    enforce_login_ip_budget(
+        auth,
+        database,
+        AuthOperation::AdminLogin,
+        "admin-login-ip",
+        &headers,
+        &request_id,
+    )
+    .await?;
     if !auth.allow_auth_request(
         AuthOperation::AdminLogin,
         &auth_rate_limit_key(&headers, &email),
@@ -1704,6 +1722,15 @@ pub async fn web_login(
     let email = normalize_email(&request.email)
         .ok_or_else(|| ApiError::invalid("邮箱格式无效", request_id.clone()))?;
     let (database, auth) = services(&state, &request_id)?;
+    enforce_login_ip_budget(
+        auth,
+        database,
+        AuthOperation::WebLogin,
+        "web-login-ip",
+        &headers,
+        &request_id,
+    )
+    .await?;
     if !auth.allow_auth_request(
         AuthOperation::WebLogin,
         &auth_rate_limit_key(&headers, &email),
@@ -2939,8 +2966,8 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         })
 }
 
-fn auth_rate_limit_key(headers: &HeaderMap, identity: &str) -> String {
-    let client = headers
+fn auth_client_key(headers: &HeaderMap) -> String {
+    headers
         .get("x-forwarded-for")
         .or_else(|| headers.get("x-real-ip"))
         .and_then(|value| value.to_str().ok())
@@ -2949,8 +2976,35 @@ fn auth_rate_limit_key(headers: &HeaderMap, identity: &str) -> String {
         .map_or_else(
             || "unknown-client".to_owned(),
             |address| address.to_string(),
-        );
-    format!("{client}:{}", hex::encode(opaque_token_hash(identity)))
+        )
+}
+
+fn auth_rate_limit_key(headers: &HeaderMap, identity: &str) -> String {
+    format!(
+        "{}:{}",
+        auth_client_key(headers),
+        hex::encode(opaque_token_hash(identity))
+    )
+}
+
+/// Per-client login budget on top of the per-account buckets.
+///
+/// The per-account key alone lets an attacker rotate emails to dodge brute
+/// force protection (password spraying); this fixed-identity bucket caps the
+/// combined login attempts from one source address.
+async fn enforce_login_ip_budget(
+    auth: &AuthService,
+    database: &Persistence,
+    operation: AuthOperation,
+    bucket_prefix: &str,
+    headers: &HeaderMap,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    let client = auth_client_key(headers);
+    if !auth.allow_auth_request(operation, &client) {
+        return Err(ApiError::rate_limited(request_id.to_owned()));
+    }
+    enforce_shared_rate_limit(database, &format!("{bucket_prefix}:{client}"), request_id).await
 }
 
 async fn enforce_shared_rate_limit(
