@@ -13,6 +13,11 @@ const LEGACY_MIGRATION_VERSIONS: &[i64] = &[
     27, 28, 29,
 ];
 
+/// 刷新令牌轮换宽限窗口：旧令牌在此窗口内被再次使用视为客户端并发轮换
+/// （如前台同步与后台 `WorkManager` 同时刷新），补发族内新令牌而非吊销全族；
+/// 窗口外的重放仍按令牌泄露处理。
+const REFRESH_ROTATION_GRACE_SECONDS: i64 = 30;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
     #[error("database operation failed")]
@@ -1347,16 +1352,43 @@ impl Persistence {
         .await?
         .ok_or(PersistenceError::InvalidRefreshToken)?;
 
+        // 轮换宽限：同一客户端的多进程（前台同步与后台 WorkManager）可能并发
+        // 用同一旧令牌刷新，第二个请求会被误判为重放并引爆全族。刚轮换过
+        // （used_at 在宽限窗口内）且族仍健康（存在未用未吊销的活跃令牌，排除
+        // 吊销/登出场景）时，为竞争方补发族内新令牌而不是吊销；窗口外的重放
+        // 仍按泄露处理。库中只存哈希，无法归还既有明文，故补发新令牌。
+        let mut grace_rotation = false;
         if token.used_at.is_some() || token.revoked_at.is_some() {
-            sqlx::query(
-                "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP) \
-                 WHERE family_id = $1",
-            )
-            .bind(token.family_id)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            return Err(PersistenceError::RefreshTokenReuse);
+            let in_grace_window = token.used_at.is_some_and(|used| {
+                OffsetDateTime::now_utc() - used
+                    <= time::Duration::seconds(REFRESH_ROTATION_GRACE_SECONDS)
+            });
+            let family_healthy = if in_grace_window {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM refresh_tokens \
+                     WHERE family_id = $1 AND used_at IS NULL AND revoked_at IS NULL \
+                       AND expires_at > CURRENT_TIMESTAMP",
+                )
+                .bind(token.family_id)
+                .fetch_one(&mut *tx)
+                .await?
+                    > 0
+            } else {
+                false
+            };
+            if family_healthy {
+                grace_rotation = true;
+            } else {
+                sqlx::query(
+                    "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP) \
+                     WHERE family_id = $1",
+                )
+                .bind(token.family_id)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                return Err(PersistenceError::RefreshTokenReuse);
+            }
         }
         if token.expires_at <= OffsetDateTime::now_utc() {
             return Err(PersistenceError::InvalidRefreshToken);
@@ -1367,13 +1399,15 @@ impl Persistence {
             return Err(PersistenceError::InvalidRefreshToken);
         }
         ensure_existing_device(&mut tx, token.user_id, token.device_id).await?;
-        sqlx::query(
-            "UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP, revoked_at = CURRENT_TIMESTAMP \
-             WHERE token_hash = $1",
-        )
-        .bind(old_token_hash)
-        .execute(&mut *tx)
-        .await?;
+        if !grace_rotation {
+            sqlx::query(
+                "UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP, revoked_at = CURRENT_TIMESTAMP \
+                 WHERE token_hash = $1",
+            )
+            .bind(old_token_hash)
+            .execute(&mut *tx)
+            .await?;
+        }
         let mut replacement = replacement.clone();
         replacement.family_id = token.family_id;
         insert_refresh(&mut tx, token.user_id, token.device_id, &replacement).await?;
@@ -1386,7 +1420,7 @@ impl Persistence {
             token.user_id,
             Some(token.user_id),
             "auth.refresh",
-            json!({"deviceId": token.device_id}),
+            json!({"deviceId": token.device_id, "graceRotation": grace_rotation}),
             request_id,
         )
         .await?;

@@ -135,12 +135,38 @@ async fn web_refresh_rotates_cookie_and_reuse_revokes_family() {
     let rotated_cookie = web_refresh_cookie(&headers);
     let (status, _, headers) = refresh(&web.app, &rotated_cookie).await;
     assert_eq!(status, StatusCode::OK);
-    let rotated_cookie = web_refresh_cookie(&headers);
+    let active_cookie = web_refresh_cookie(&headers);
 
-    // 旧 Cookie 重放 401，且触发家族撤销：轮换后的成员一并失效。
+    // 轮换宽限窗口内重放旧 Cookie：视为并发轮换，补发族内新令牌而非吊销。
     let (status, _, _) = refresh(&web.app, &first_cookie).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "replay inside the rotation grace window must succeed"
+    );
+
+    // 把旧 Cookie 对应令牌的轮换时间拨回窗口之外，重放按泄露处理：
+    // 401 且全族吊销（活跃成员一并失效）。
+    let retired_token = rotated_cookie
+        .split_once('=')
+        .expect("cookie should be a name=value pair")
+        .1;
+    let retired_hash = tasktips_api::auth::opaque_token_hash(retired_token).clone();
+    let database_url = std::env::var("TASKTIPS_DATABASE_URL").unwrap();
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("test pool should connect");
+    sqlx::query(
+        "UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP - INTERVAL '31 seconds' \
+         WHERE token_hash = $1",
+    )
+    .bind(&retired_hash)
+    .execute(&pool)
+    .await
+    .expect("grace window backdate should apply");
     let (status, _, _) = refresh(&web.app, &rotated_cookie).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _, _) = refresh(&web.app, &active_cookie).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 

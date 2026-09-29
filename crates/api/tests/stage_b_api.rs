@@ -66,7 +66,7 @@ async fn stage_b_http_workflow_enforces_isolation_and_rotation() {
     assert_project_http_isolation(&app, &user_one, &user_two).await;
     assert_device_http_isolation(&app, &user_one, &user_two).await;
     assert_admin_http_boundary(&app, &admin, &user_one, &user_two).await;
-    assert_refresh_http_reuse(&app, &user_one).await;
+    assert_refresh_http_reuse(&app, &database_url, &user_one).await;
     assert_logout_http_revokes_device_tokens(&app, &user_two).await;
     assert_device_http_revocation(&app, &user_two).await;
     assert_account_purge_requires_reauth(&app, &admin, &user_one).await;
@@ -360,7 +360,8 @@ async fn assert_admin_http_boundary(
     }
 }
 
-async fn assert_refresh_http_reuse(app: &Router, user_one: &Tokens) {
+async fn assert_refresh_http_reuse(app: &Router, database_url: &str, user_one: &Tokens) {
+    // 首次轮换：旧令牌作废、签发新令牌。
     let (status, rotated) = json_request(
         app,
         "POST",
@@ -371,6 +372,9 @@ async fn assert_refresh_http_reuse(app: &Router, user_one: &Tokens) {
     .await;
     assert_eq!(status, StatusCode::OK);
     let rotated_refresh = rotated["refreshToken"].as_str().unwrap().to_owned();
+
+    // 轮换宽限窗口内重放旧令牌：视为客户端并发轮换（如前台与后台进程），
+    // 补发族内新令牌而非吊销，族内已有令牌继续可用。
     let (status, _) = json_request(
         app,
         "POST",
@@ -379,13 +383,62 @@ async fn assert_refresh_http_reuse(app: &Router, user_one: &Tokens) {
         Some(json!({"refreshToken": user_one.refresh_token})),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "replay inside the rotation grace window must be granted a sibling token"
+    );
     let (status, _) = json_request(
         app,
         "POST",
         "/api/v1/auth/refresh",
         None,
         Some(json!({"refreshToken": rotated_refresh})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "family must stay healthy");
+
+    // 重新轮换出一份可用旧令牌用于窗口外重放测试。
+    let (status, body) = json_request(
+        app,
+        "POST",
+        "/api/v1/auth/refresh",
+        None,
+        Some(json!({"refreshToken": rotated_refresh})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let active_refresh = body["refreshToken"].as_str().unwrap().to_owned();
+
+    // 把刚作废旧令牌的轮换时间拨回宽限窗口之外，重放按泄露处理：
+    // 401 且全族吊销（活跃成员一并失效）。
+    let retired_hash = tasktips_api::auth::opaque_token_hash(&rotated_refresh).clone();
+    let pool = sqlx::PgPool::connect(database_url)
+        .await
+        .expect("test pool should connect");
+    sqlx::query(
+        "UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP - INTERVAL '31 seconds' \
+         WHERE token_hash = $1",
+    )
+    .bind(&retired_hash)
+    .execute(&pool)
+    .await
+    .expect("grace window backdate should apply");
+    let (status, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/auth/refresh",
+        None,
+        Some(json!({"refreshToken": rotated_refresh})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/auth/refresh",
+        None,
+        Some(json!({"refreshToken": active_refresh})),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);

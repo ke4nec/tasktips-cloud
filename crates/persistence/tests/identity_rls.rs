@@ -544,6 +544,27 @@ async fn assert_refresh_reuse_revokes_family(
         .rotate_refresh_token(&user_one.refresh_hash, &replacement, "refresh-test")
         .await
         .expect("first refresh should rotate");
+
+    // 轮换宽限窗口内的重放：视为客户端并发轮换，补发族内新令牌而非吊销。
+    let grace_replacement = NewRefreshToken {
+        token_hash: token_hash(test_id, 32),
+        family_id: Uuid::new_v4(),
+        expires_at: refresh_expiry(3_600),
+    };
+    persistence
+        .rotate_refresh_token(&user_one.refresh_hash, &grace_replacement, "grace-test")
+        .await
+        .expect("replay inside the rotation grace window must be granted a sibling token");
+
+    // 拨回宽限窗口之外：重放按泄露处理，撤销整个 family（活跃成员一并失效）。
+    sqlx::query(
+        "UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP - INTERVAL '31 seconds' \
+         WHERE token_hash = $1",
+    )
+    .bind(&user_one.refresh_hash)
+    .execute(persistence.pool())
+    .await
+    .expect("grace window backdate should apply");
     assert!(matches!(
         persistence
             .rotate_refresh_token(&user_one.refresh_hash, &replacement, "reuse-test")
