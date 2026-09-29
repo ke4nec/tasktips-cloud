@@ -242,6 +242,74 @@ pub struct PushOutcome {
     pub replayed: bool,
 }
 
+/// 修复前写入的幂等记录采用旧序列化（`snake_case` 字段、time 默认空格分隔时间），
+/// 严格 ISO 8601 客户端解析重放响应时会失败，且这些请求已落库、重推只会得到
+/// Conflict，因此重放时把存储响应迁移为当前合同格式（camelCase + RFC 3339）。
+/// 逻辑结果不变，仅编码现代化；新格式记录原样通过，旧记录随 30 天重放窗口
+/// 过期后此函数可移除。
+fn migrate_stored_push_response(response: serde_json::Value) -> serde_json::Value {
+    let Some(results) = response
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+    else {
+        return response;
+    };
+    let mut migrated = response;
+    migrated["results"] = serde_json::Value::Array(
+        results
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::Object(map) => {
+                    serde_json::Value::Object(migrate_result_object(map))
+                }
+                other => other,
+            })
+            .collect(),
+    );
+    migrated
+}
+
+fn migrate_result_object(
+    map: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut migrated = serde_json::Map::new();
+    for (key, value) in map {
+        let (key, value) = match key.as_str() {
+            "change_sequence" => ("changeSequence".to_owned(), value),
+            "expected_revision" => ("expectedRevision".to_owned(), value),
+            "actual_revision" => ("actualRevision".to_owned(), value),
+            "changed_at" => ("changedAt".to_owned(), migrate_legacy_timestamp(value)),
+            _ => (key, value),
+        };
+        migrated.insert(key, value);
+    }
+    migrated
+}
+
+fn migrate_legacy_timestamp(value: serde_json::Value) -> serde_json::Value {
+    let Some(raw) = value.as_str() else {
+        return value;
+    };
+    if OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339).is_ok() {
+        return value;
+    }
+    // 旧格式（UTC 存储）："YYYY-MM-DD HH:MM:SS[.fff…] +00:00:00"；非 UTC 偏移
+    // 的历史值不存在（客户端均发送 UTC），遇到时原样返回以防错误换算。
+    let Some((stamp, offset)) = raw.rsplit_once(' ') else {
+        return value;
+    };
+    if offset != "+00:00:00" {
+        return value;
+    }
+    let candidate = stamp.replacen(' ', "T", 1) + "Z";
+    if OffsetDateTime::parse(&candidate, &time::format_description::well_known::Rfc3339).is_ok() {
+        serde_json::Value::String(candidate)
+    } else {
+        value
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BootstrapPage {
     pub manifest_id: Uuid,
@@ -4306,7 +4374,7 @@ impl Persistence {
                 tx.commit().await?;
                 if response_status == 200 {
                     return Ok(PushOutcome {
-                        response,
+                        response: migrate_stored_push_response(response),
                         replayed: true,
                     });
                 }
@@ -5874,6 +5942,64 @@ mod tests {
         assert!(
             serialized.contains('T') && !serialized.contains(' '),
             "push result changedAt must be RFC 3339, got {serialized}"
+        );
+    }
+
+    /// 修复前落库的幂等响应（`snake_case` 字段、空格分隔时间）在重放时必须
+    /// 迁移为当前合同格式，否则已应用请求的重试在严格客户端上永远失败。
+    #[test]
+    fn stored_push_replays_migrate_to_current_contract_format() {
+        let stored = serde_json::json!({
+            "generation": 1,
+            "results": [
+                {"status": "applied", "kind": "todo", "id": "01M2SWVB7N4P6GABVVGQTDF4BE",
+                 "revision": 1, "change_sequence": 3,
+                 "changed_at": "2026-09-18 09:16:47.108554 +00:00:00"},
+                {"status": "conflict", "kind": "classification", "id": "classification",
+                 "expected_revision": null, "actual_revision": 1}
+            ]
+        });
+        let migrated = super::migrate_stored_push_response(stored);
+        let applied = &migrated["results"][0];
+        assert_eq!(
+            applied["changedAt"],
+            serde_json::json!("2026-09-18T09:16:47.108554Z")
+        );
+        assert_eq!(applied["changeSequence"], 3);
+        assert!(applied.get("changed_at").is_none());
+        assert!(applied.get("change_sequence").is_none());
+        let conflict = &migrated["results"][1];
+        assert_eq!(conflict["expectedRevision"], serde_json::Value::Null);
+        assert_eq!(conflict["actualRevision"], 1);
+        assert_eq!(migrated["generation"], 1);
+    }
+
+    #[test]
+    fn stored_push_replays_in_current_format_pass_through() {
+        let current = serde_json::json!({
+            "generation": 2,
+            "results": [
+                {"status": "applied", "kind": "todo", "id": "01M2SWVB7N4P6GABVVGQTDF4BE",
+                 "revision": 2, "changeSequence": 9, "changedAt": "2026-09-28T14:00:00Z"}
+            ]
+        });
+        assert_eq!(
+            super::migrate_stored_push_response(current.clone()),
+            current
+        );
+    }
+
+    #[test]
+    fn non_push_replays_pass_through_unchanged() {
+        let failure = serde_json::json!({
+            "code": "CURSOR_INVALID",
+            "message": "当前设备必须先完成 bootstrap",
+            "retryable": false,
+            "requestId": "abc"
+        });
+        assert_eq!(
+            super::migrate_stored_push_response(failure.clone()),
+            failure
         );
     }
 }
