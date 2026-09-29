@@ -534,6 +534,7 @@ async fn assert_refresh_reuse_revokes_family(
     user_one: &ActivatedUser,
     test_id: Uuid,
 ) {
+    // —— 家族 A（登录链自带）：宽限补发至族活跃成员上限后拒绝并吊销全族。——
     let replacement_hash = token_hash(test_id, 31);
     let replacement = NewRefreshToken {
         token_hash: replacement_hash.clone(),
@@ -545,35 +546,81 @@ async fn assert_refresh_reuse_revokes_family(
         .await
         .expect("first refresh should rotate");
 
-    // 轮换宽限窗口内的重放：视为客户端并发轮换，补发族内新令牌而非吊销。
-    let grace_replacement = NewRefreshToken {
-        token_hash: token_hash(test_id, 32),
+    // 轮换宽限窗口内的重放：视为客户端并发轮换，逐次补发族内新令牌，
+    // 直到活跃成员数达到上限。
+    for offset in 32..35 {
+        let grace_replacement = NewRefreshToken {
+            token_hash: token_hash(test_id, offset),
+            family_id: Uuid::new_v4(),
+            expires_at: refresh_expiry(3_600),
+        };
+        persistence
+            .rotate_refresh_token(&user_one.refresh_hash, &grace_replacement, "grace-test")
+            .await
+            .expect("replay inside the rotation grace window must be granted a sibling token");
+    }
+
+    // 活跃成员已达上限：继续重放按泄露处置，撤销整个 family
+    // （上限内已补发的成员一并失效）。
+    let over_limit = NewRefreshToken {
+        token_hash: token_hash(test_id, 35),
         family_id: Uuid::new_v4(),
         expires_at: refresh_expiry(3_600),
     };
-    persistence
-        .rotate_refresh_token(&user_one.refresh_hash, &grace_replacement, "grace-test")
-        .await
-        .expect("replay inside the rotation grace window must be granted a sibling token");
-
-    // 拨回宽限窗口之外：重放按泄露处理，撤销整个 family（活跃成员一并失效）。
-    sqlx::query(
-        "UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP - INTERVAL '31 seconds' \
-         WHERE token_hash = $1",
-    )
-    .bind(&user_one.refresh_hash)
-    .execute(persistence.pool())
-    .await
-    .expect("grace window backdate should apply");
     assert!(matches!(
         persistence
-            .rotate_refresh_token(&user_one.refresh_hash, &replacement, "reuse-test")
+            .rotate_refresh_token(&user_one.refresh_hash, &over_limit, "cap-test")
             .await,
         Err(PersistenceError::RefreshTokenReuse)
     ));
     assert!(matches!(
         persistence
-            .rotate_refresh_token(&replacement_hash, &replacement, "reuse-test")
+            .rotate_refresh_token(&replacement_hash, &replacement, "cap-test")
+            .await,
+        Err(PersistenceError::RefreshTokenReuse)
+    ));
+
+    // —— 家族 B（独立插入）：窗口外的重放仍按泄露处置，撤销全族。——
+    let seeded_hash = token_hash(test_id, 36);
+    sqlx::query(
+        "INSERT INTO refresh_tokens \
+         (user_id, device_id, token_hash, family_id, expires_at) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(user_one.user_id)
+    .bind(user_one.device_id)
+    .bind(&seeded_hash)
+    .bind(Uuid::new_v4())
+    .bind(refresh_expiry(3_600))
+    .execute(persistence.pool())
+    .await
+    .expect("independent family token should insert");
+    let seeded_replacement = NewRefreshToken {
+        token_hash: token_hash(test_id, 37),
+        family_id: Uuid::new_v4(),
+        expires_at: refresh_expiry(3_600),
+    };
+    persistence
+        .rotate_refresh_token(&seeded_hash, &seeded_replacement, "refresh-test")
+        .await
+        .expect("independent family refresh should rotate");
+    sqlx::query(
+        "UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP - INTERVAL '31 seconds' \
+         WHERE token_hash = $1",
+    )
+    .bind(&seeded_hash)
+    .execute(persistence.pool())
+    .await
+    .expect("grace window backdate should apply");
+    assert!(matches!(
+        persistence
+            .rotate_refresh_token(&seeded_hash, &seeded_replacement, "reuse-test")
+            .await,
+        Err(PersistenceError::RefreshTokenReuse)
+    ));
+    assert!(matches!(
+        persistence
+            .rotate_refresh_token(&token_hash(test_id, 37), &seeded_replacement, "reuse-test")
             .await,
         Err(PersistenceError::RefreshTokenReuse)
     ));

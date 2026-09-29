@@ -18,6 +18,11 @@ const LEGACY_MIGRATION_VERSIONS: &[i64] = &[
 /// 窗口外的重放仍按令牌泄露处理。
 const REFRESH_ROTATION_GRACE_SECONDS: i64 = 30;
 
+/// 刷新令牌族活跃成员上限：正常并发进程（前台同步与后台任务）同时存活
+/// 2～3 枚；达到上限说明补发被滥用（如窗口内反复重放盗取的令牌），拒绝
+/// 补发并按泄露处置，防止宽限窗口内无限铸造。
+const REFRESH_FAMILY_ACTIVE_LIMIT: i64 = 4;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
     #[error("database operation failed")]
@@ -1354,9 +1359,10 @@ impl Persistence {
 
         // 轮换宽限：同一客户端的多进程（前台同步与后台 WorkManager）可能并发
         // 用同一旧令牌刷新，第二个请求会被误判为重放并引爆全族。刚轮换过
-        // （used_at 在宽限窗口内）且族仍健康（存在未用未吊销的活跃令牌，排除
-        // 吊销/登出场景）时，为竞争方补发族内新令牌而不是吊销；窗口外的重放
-        // 仍按泄露处理。库中只存哈希，无法归还既有明文，故补发新令牌。
+        // （used_at 在宽限窗口内）且族仍健康（活跃令牌数量在 1 到上限之间，
+        // 排除吊销/登出场景并防止无限铸造）时，为竞争方补发族内新令牌而不是
+        // 吊销；窗口外的重放仍按泄露处理。库中只存哈希，无法归还既有明文，
+        // 故补发新令牌。
         let mut grace_rotation = false;
         if token.used_at.is_some() || token.revoked_at.is_some() {
             let in_grace_window = token.used_at.is_some_and(|used| {
@@ -1364,15 +1370,15 @@ impl Persistence {
                     <= time::Duration::seconds(REFRESH_ROTATION_GRACE_SECONDS)
             });
             let family_healthy = if in_grace_window {
-                sqlx::query_scalar::<_, i64>(
+                let active_members = sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM refresh_tokens \
                      WHERE family_id = $1 AND used_at IS NULL AND revoked_at IS NULL \
                        AND expires_at > CURRENT_TIMESTAMP",
                 )
                 .bind(token.family_id)
                 .fetch_one(&mut *tx)
-                .await?
-                    > 0
+                .await?;
+                active_members > 0 && active_members < REFRESH_FAMILY_ACTIVE_LIMIT
             } else {
                 false
             };
