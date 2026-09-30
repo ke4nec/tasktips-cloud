@@ -264,9 +264,12 @@ const messages = {
     },
     audit: {
       export: '导出 CSV',
-      note: '审计事件永久保留。导出与页面内容只包含操作元数据，不包含用户内容。',
+      note: '成功审计永久保留；登录/刷新/二次认证失败审计仅保留 90 天。导出与页面内容只包含操作元数据（原因/来源/邮箱哈希/设备/客户端哈希），不包含密码、令牌与用户内容。',
       exported: '审计记录已开始下载',
       exportFailed: '导出失败，请稍后重试。',
+      filterAction: '按事件过滤',
+      filterAll: '全部事件',
+      filterFailures: '仅看失败',
     },
     auditAction: {
       account: {
@@ -278,8 +281,11 @@ const messages = {
       },
       auth: {
         login: '登录',
+        loginFailed: '登录失败',
         logout: '退出登录',
         refresh: '刷新会话',
+        refreshFailed: '刷新失败',
+        reauthFailed: '二次认证失败',
         registered: '注册申请',
         invitationActivated: '邀请激活',
       },
@@ -312,6 +318,8 @@ const messages = {
       tombstones: '删除标记数',
       deviceId: '设备 ID',
       invitationId: '邀请 ID',
+      emailHash: '邮箱哈希',
+      clientHash: '客户端哈希',
     },
     settings: {
       access: '账号与访问',
@@ -684,9 +692,12 @@ const messages = {
     },
     audit: {
       export: 'Export CSV',
-      note: 'Audit events are kept permanently. Exports and pages contain operational metadata only, never user content.',
+      note: 'Success audits are kept permanently; login/refresh/re-auth failures are kept 90 days. Exports and pages contain operational metadata only (reason/source/email hash/device/client hash), never passwords, tokens, or user content.',
       exported: 'Audit CSV download started',
       exportFailed: 'Export failed. Try again later.',
+      filterAction: 'Filter by event',
+      filterAll: 'All events',
+      filterFailures: 'Failures only',
     },
     auditAction: {
       account: {
@@ -698,8 +709,11 @@ const messages = {
       },
       auth: {
         login: 'Signed in',
+        loginFailed: 'Sign-in failed',
         logout: 'Signed out',
         refresh: 'Session refreshed',
+        refreshFailed: 'Refresh failed',
+        reauthFailed: 'Re-auth failed',
         registered: 'Registration submitted',
         invitationActivated: 'Invitation activated',
       },
@@ -732,6 +746,8 @@ const messages = {
       tombstones: 'Tombstones',
       deviceId: 'Device ID',
       invitationId: 'Invitation ID',
+      emailHash: 'Email hash',
+      clientHash: 'Client hash',
     },
     settings: {
       access: 'Accounts and access',

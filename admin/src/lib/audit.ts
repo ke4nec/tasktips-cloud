@@ -10,8 +10,11 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   'account.purge_export_ready': 'account.purgeExportReady',
   'account.purge_completed': 'account.purgeCompleted',
   'auth.login': 'auth.login',
+  'auth.login_failed': 'auth.loginFailed',
   'auth.logout': 'auth.logout',
   'auth.refresh': 'auth.refresh',
+  'auth.refresh_failed': 'auth.refreshFailed',
+  'auth.reauth_failed': 'auth.reauthFailed',
   'auth.registered': 'auth.registered',
   'auth.invitation_activated': 'auth.invitationActivated',
   'device.revoked': 'device.revoked',
@@ -46,6 +49,8 @@ const METADATA_FIELDS: Record<string, string> = {
   tombstones: 'metadata.tombstones',
   deviceId: 'metadata.deviceId',
   invitationId: 'metadata.invitationId',
+  emailHash: 'metadata.emailHash',
+  clientHash: 'metadata.clientHash',
 };
 
 export interface AuditMetadataRow {

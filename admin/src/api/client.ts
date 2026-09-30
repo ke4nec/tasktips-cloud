@@ -5,6 +5,7 @@ type LivenessResponse =
 type ReadinessResponse =
   paths['/health/ready']['get']['responses'][200]['content']['application/json'];
 type AdminPageQuery = { limit?: number; offset?: number };
+type AdminAuditQuery = AdminPageQuery & { action?: string };
 type AdminProjectPageQuery = AdminPageQuery & { search?: string };
 
 export class ApiError extends Error {
@@ -148,7 +149,7 @@ export class ApiClient {
   }
 
   getAdminAuditEvents(
-    query?: AdminPageQuery,
+    query?: AdminAuditQuery,
   ): Promise<components['schemas']['AuditEventList']> {
     return this.get(`/api/v1/admin/audit-events${pageQuery(query)}`);
   }
@@ -173,11 +174,15 @@ export class ApiClient {
   }
 
   /** Server-generated audit CSV; returned as text for a browser download. */
-  async exportAuditCsv(): Promise<string> {
-    const response = await this.fetcher('/api/v1/admin/audit-events.csv', {
-      credentials: 'include',
-      headers: this.headers(),
-    });
+  async exportAuditCsv(action?: string): Promise<string> {
+    const query = action ? `?action=${encodeURIComponent(action)}` : '';
+    const response = await this.fetcher(
+      `/api/v1/admin/audit-events.csv${query}`,
+      {
+        credentials: 'include',
+        headers: this.headers(),
+      },
+    );
     if (!response.ok) {
       const errorBody = (await response.json().catch(() => undefined)) as
         { code?: string; message?: string; requestId?: string } | undefined;
@@ -332,16 +337,20 @@ export class ApiClient {
   }
 }
 
-function pageQuery(query?: AdminPageQuery | AdminProjectPageQuery): string {
+function pageQuery(
+  query?: AdminPageQuery | AdminProjectPageQuery | AdminAuditQuery,
+): string {
   if (
     !query ||
     (query.limit === undefined &&
       query.offset === undefined &&
-      !('search' in query && query.search))
+      !('search' in query && query.search) &&
+      !('action' in query && query.action))
   )
     return '';
   const params = new URLSearchParams();
   if ('search' in query && query.search) params.set('search', query.search);
+  if ('action' in query && query.action) params.set('action', query.action);
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.offset !== undefined) params.set('offset', String(query.offset));
   return `?${params.toString()}`;

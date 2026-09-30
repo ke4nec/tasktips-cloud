@@ -942,7 +942,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List audit metadata */
+    /**
+     * List audit metadata
+     * @description Supports exact action filtering for attack investigation (auth.login_failed, auth.refresh_failed, auth.reauth_failed). Failure metadata only contains operational fields (reason, source, emailHash, deviceId, clientHash) and never passwords, tokens, or plaintext PII.
+     */
     get: operations['adminAuditEvents'];
     put?: never;
     post?: never;
@@ -1684,7 +1687,9 @@ export interface components {
       subjectUserId?: string | null;
       /** Format: uuid */
       projectId?: string | null;
+      /** @description Success actions (auth.login, auth.refresh) and failure actions (auth.login_failed, auth.refresh_failed, auth.reauth_failed) for attack detection. Failure metadata only carries reason, source, emailHash, deviceId, clientHash. */
       action: string;
+      /** @description Operational metadata only. Failure events carry reason/source/emailHash/deviceId/clientHash; never passwords, tokens, payloads, or plaintext PII. */
       metadata: Record<string, never>;
       requestId?: string | null;
       /** Format: date-time */
@@ -1834,6 +1839,19 @@ export interface components {
     AfterSequence: number;
     Limit: number;
     Offset: number;
+    /** @description Exact audit action filter for attack investigation. */
+    AuditAction:
+      | 'auth.login_failed'
+      | 'auth.refresh_failed'
+      | 'auth.reauth_failed'
+      | 'auth.login'
+      | 'auth.refresh'
+      | 'auth.logout'
+      | 'auth.web.logout'
+      | 'auth.registered'
+      | 'auth.invitation_activated'
+      | 'account.status_changed'
+      | 'device.revoked';
   };
   requestBodies: never;
   headers: never;
@@ -3352,6 +3370,8 @@ export interface operations {
       query?: {
         limit?: components['parameters']['Limit'];
         offset?: components['parameters']['Offset'];
+        /** @description Exact audit action filter for attack investigation. */
+        action?: components['parameters']['AuditAction'];
       };
       header?: never;
       path?: never;
@@ -3374,7 +3394,10 @@ export interface operations {
   };
   adminAuditEventsCsv: {
     parameters: {
-      query?: never;
+      query?: {
+        /** @description Exact audit action filter for attack investigation. */
+        action?: components['parameters']['AuditAction'];
+      };
       header?: never;
       path?: never;
       cookie?: never;

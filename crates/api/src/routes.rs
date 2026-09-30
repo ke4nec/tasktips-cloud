@@ -21,8 +21,9 @@ use tasktips_application::{
 };
 use tasktips_object_store::ObjectStoreError;
 use tasktips_persistence::{
-    DeviceProfile, NewInvitation, NewRefreshToken, NewSyncRevision, Persistence, PersistenceError,
-    StoredPayload, SyncRecord, UserRecord, invitation_expiry, refresh_expiry,
+    AUTH_LOGIN_FAILED_ACTION, AUTH_REAUTH_FAILED_ACTION, AUTH_REFRESH_FAILED_ACTION, DeviceProfile,
+    NewInvitation, NewRefreshToken, NewSyncRevision, Persistence, PersistenceError, StoredPayload,
+    SyncRecord, UserRecord, invitation_expiry, refresh_expiry,
 };
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
@@ -41,6 +42,21 @@ const ADMIN_REFRESH_COOKIE: &str = "tasktips_admin_refresh";
 const WEB_REFRESH_COOKIE: &str = "tasktips_web_refresh";
 const MAX_OPTIONAL_JSON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
+
+/// 审计动作过滤白名单：精确匹配，避免通配扫描与注入。
+const ALLOWED_AUDIT_ACTIONS: &[&str] = &[
+    AUTH_LOGIN_FAILED_ACTION,
+    AUTH_REFRESH_FAILED_ACTION,
+    AUTH_REAUTH_FAILED_ACTION,
+    "auth.login",
+    "auth.refresh",
+    "auth.logout",
+    "auth.web.logout",
+    "auth.registered",
+    "auth.invitation_activated",
+    "account.status_changed",
+    "device.revoked",
+];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -490,6 +506,14 @@ pub struct ReasonRequest {
 pub struct AdminPageQuery {
     limit: Option<i64>,
     offset: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminAuditQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    action: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1297,6 +1321,7 @@ pub async fn cancel_restore(
     Ok(Json(job))
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1334,6 +1359,18 @@ pub async fn login(
         })
         .await
         .map_err(|_| ApiError::authentication(request_id.clone()))?;
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            None,
+            None,
+            "unknown_user",
+            "login",
+            &request_id,
+        )
+        .await;
         return Err(ApiError::authentication(request_id));
     };
     let password_hash = user.password_hash.clone();
@@ -1343,12 +1380,48 @@ pub async fn login(
     .await
     .map_err(|_| ApiError::internal(request_id.clone()))?;
     if !valid {
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            Some(user.id),
+            Some(user.id),
+            "invalid_password",
+            "login",
+            &request_id,
+        )
+        .await;
         return Err(ApiError::authentication(request_id));
     }
     if user.role != "user" {
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            Some(user.id),
+            Some(user.id),
+            "wrong_role",
+            "login",
+            &request_id,
+        )
+        .await;
         return Err(ApiError::authentication(request_id));
     }
     if user.status != "active" {
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            Some(user.id),
+            Some(user.id),
+            "account_disabled",
+            "login",
+            &request_id,
+        )
+        .await;
         return Err(account_disabled(request_id));
     }
 
@@ -1360,13 +1433,38 @@ pub async fn login(
         family_id: Uuid::new_v4(),
         expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
     };
-    let session = database
+    let session = match database
         .create_login_session(user.id, request.device_id, &refresh, &request_id)
         .await
-        .map_err(|error| match error {
-            PersistenceError::NotFound => ApiError::authentication(request_id.clone()),
-            other => map_persistence(other, request_id.clone()),
-        })?;
+    {
+        Ok(session) => session,
+        Err(error) => {
+            let reason = match &error {
+                PersistenceError::NotFound => Some("unknown_user"),
+                PersistenceError::AccountDisabled => Some("account_disabled"),
+                PersistenceError::DeviceRevoked => Some("device_revoked"),
+                _ => None,
+            };
+            if let Some(reason) = reason {
+                log_login_failure(
+                    database,
+                    &headers,
+                    &email,
+                    Some(request.device_id),
+                    Some(user.id),
+                    Some(user.id),
+                    reason,
+                    "login",
+                    &request_id,
+                )
+                .await;
+            }
+            return Err(match error {
+                PersistenceError::NotFound => ApiError::authentication(request_id),
+                other => map_persistence(other, request_id),
+            });
+        }
+    };
     user_token_response(
         auth,
         &session.user,
@@ -1376,6 +1474,7 @@ pub async fn login(
     )
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn admin_login(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1417,6 +1516,18 @@ pub async fn admin_login(
         })
         .await
         .map_err(|_| ApiError::authentication(request_id.clone()))?;
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            None,
+            None,
+            "unknown_user",
+            "admin_login",
+            &request_id,
+        )
+        .await;
         return Err(ApiError::authentication(request_id));
     };
     let password_hash = user.password_hash.clone();
@@ -1426,9 +1537,38 @@ pub async fn admin_login(
     .await
     .map_err(|_| ApiError::internal(request_id.clone()))?;
     if !valid || user.role != "system_admin" {
+        let reason = if valid {
+            "wrong_role"
+        } else {
+            "invalid_password"
+        };
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            Some(user.id),
+            Some(user.id),
+            reason,
+            "admin_login",
+            &request_id,
+        )
+        .await;
         return Err(ApiError::authentication(request_id));
     }
     if user.status != "active" {
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            Some(user.id),
+            Some(user.id),
+            "account_disabled",
+            "admin_login",
+            &request_id,
+        )
+        .await;
         return Err(account_disabled(request_id));
     }
     let opaque = auth
@@ -1439,13 +1579,38 @@ pub async fn admin_login(
         family_id: Uuid::new_v4(),
         expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
     };
-    let session = database
+    let session = match database
         .create_login_session(user.id, request.device_id, &refresh, &request_id)
         .await
-        .map_err(|error| match error {
-            PersistenceError::NotFound => ApiError::authentication(request_id.clone()),
-            other => map_persistence(other, request_id.clone()),
-        })?;
+    {
+        Ok(session) => session,
+        Err(error) => {
+            let reason = match &error {
+                PersistenceError::NotFound => Some("unknown_user"),
+                PersistenceError::AccountDisabled => Some("account_disabled"),
+                PersistenceError::DeviceRevoked => Some("device_revoked"),
+                _ => None,
+            };
+            if let Some(reason) = reason {
+                log_login_failure(
+                    database,
+                    &headers,
+                    &email,
+                    Some(request.device_id),
+                    Some(user.id),
+                    Some(user.id),
+                    reason,
+                    "admin_login",
+                    &request_id,
+                )
+                .await;
+            }
+            return Err(match error {
+                PersistenceError::NotFound => ApiError::authentication(request_id),
+                other => map_persistence(other, request_id),
+            });
+        }
+    };
     admin_token_response(
         auth,
         &session.user,
@@ -1476,6 +1641,7 @@ pub async fn refresh(
     .await?;
     let refresh_token = request.refresh_token;
     if refresh_token.is_empty() {
+        log_refresh_failure(database, &headers, "invalid_token", "refresh", &request_id).await;
         return Err(ApiError::authentication(request_id));
     }
     let opaque = auth
@@ -1486,7 +1652,7 @@ pub async fn refresh(
         family_id: Uuid::new_v4(),
         expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
     };
-    let session = database
+    let session = match database
         .rotate_refresh_token_for_role(
             &opaque_token_hash(&refresh_token),
             &replacement,
@@ -1494,7 +1660,22 @@ pub async fn refresh(
             &request_id,
         )
         .await
-        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    {
+        Ok(session) => session,
+        Err(error) => {
+            // token 重放已在 persistence 内归因记录，此处不再重复，避免双写。
+            let reason = match &error {
+                PersistenceError::RefreshTokenReuse => None,
+                PersistenceError::AccountDisabled => Some("account_disabled"),
+                PersistenceError::DeviceRevoked => Some("device_revoked"),
+                _ => Some("invalid_token"),
+            };
+            if let Some(reason) = reason {
+                log_refresh_failure(database, &headers, reason, "refresh", &request_id).await;
+            }
+            return Err(map_persistence(error, request_id));
+        }
+    };
     user_token_response(
         auth,
         &session.user,
@@ -1527,7 +1708,21 @@ pub async fn admin_refresh(
     )
     .await?;
     let refresh_token = refresh_token_from_cookie(&headers)
-        .ok_or_else(|| ApiError::authentication(request_id.clone()))?;
+        .ok_or_else(|| ApiError::authentication(request_id.clone()));
+    let refresh_token = match refresh_token {
+        Ok(token) => token,
+        Err(error) => {
+            log_refresh_failure(
+                database,
+                &headers,
+                "invalid_token",
+                "admin_refresh",
+                &request_id,
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let opaque = auth
         .issue_refresh_token()
         .map_err(|_| ApiError::internal(request_id.clone()))?;
@@ -1536,7 +1731,7 @@ pub async fn admin_refresh(
         family_id: Uuid::new_v4(),
         expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
     };
-    let session = database
+    let session = match database
         .rotate_refresh_token_for_role(
             &opaque_token_hash(&refresh_token),
             &replacement,
@@ -1544,7 +1739,21 @@ pub async fn admin_refresh(
             &request_id,
         )
         .await
-        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    {
+        Ok(session) => session,
+        Err(error) => {
+            let reason = match &error {
+                PersistenceError::RefreshTokenReuse => None,
+                PersistenceError::AccountDisabled => Some("account_disabled"),
+                PersistenceError::DeviceRevoked => Some("device_revoked"),
+                _ => Some("invalid_token"),
+            };
+            if let Some(reason) = reason {
+                log_refresh_failure(database, &headers, reason, "admin_refresh", &request_id).await;
+            }
+            return Err(map_persistence(error, request_id));
+        }
+    };
     admin_token_response(
         auth,
         &session.user,
@@ -1628,6 +1837,20 @@ pub async fn admin_reauth(
     .await
     .map_err(|_| ApiError::internal(request_id.clone()))?;
     if !valid {
+        let client_hash = auth_client_hash(&headers);
+        let _ = database
+            .record_auth_failure(
+                Some(claims.sub),
+                Some(claims.sub),
+                AUTH_REAUTH_FAILED_ACTION,
+                "invalid_password",
+                "admin_reauth",
+                None,
+                Some(claims.device_id),
+                Some(&client_hash),
+                &request_id,
+            )
+            .await;
         return Err(ApiError::authentication(request_id));
     }
     let (nonce, expires_in) = auth
@@ -1715,6 +1938,7 @@ pub async fn activate_invitation(
 
 // ---- 浏览器会话接口（设计文档 §8.2）：Cookie 刷新 + Origin 校验，只服务 role=user。 ----
 
+#[allow(clippy::too_many_lines)]
 pub async fn web_login(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1756,6 +1980,18 @@ pub async fn web_login(
         })
         .await
         .map_err(|_| ApiError::authentication(request_id.clone()))?;
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            None,
+            None,
+            "unknown_user",
+            "web_login",
+            &request_id,
+        )
+        .await;
         return Err(ApiError::authentication(request_id));
     };
     let password_hash = user.password_hash.clone();
@@ -1765,12 +2001,48 @@ pub async fn web_login(
     .await
     .map_err(|_| ApiError::internal(request_id.clone()))?;
     if !valid {
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            Some(user.id),
+            Some(user.id),
+            "invalid_password",
+            "web_login",
+            &request_id,
+        )
+        .await;
         return Err(ApiError::authentication(request_id));
     }
     if user.role != "user" {
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            Some(user.id),
+            Some(user.id),
+            "wrong_role",
+            "web_login",
+            &request_id,
+        )
+        .await;
         return Err(ApiError::authentication(request_id));
     }
     if user.status != "active" {
+        log_login_failure(
+            database,
+            &headers,
+            &email,
+            Some(request.device_id),
+            Some(user.id),
+            Some(user.id),
+            "account_disabled",
+            "web_login",
+            &request_id,
+        )
+        .await;
         return Err(account_disabled(request_id));
     }
 
@@ -1782,13 +2054,38 @@ pub async fn web_login(
         family_id: Uuid::new_v4(),
         expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
     };
-    let session = database
+    let session = match database
         .create_login_session(user.id, request.device_id, &refresh, &request_id)
         .await
-        .map_err(|error| match error {
-            PersistenceError::NotFound => ApiError::authentication(request_id.clone()),
-            other => map_persistence(other, request_id.clone()),
-        })?;
+    {
+        Ok(session) => session,
+        Err(error) => {
+            let reason = match &error {
+                PersistenceError::NotFound => Some("unknown_user"),
+                PersistenceError::AccountDisabled => Some("account_disabled"),
+                PersistenceError::DeviceRevoked => Some("device_revoked"),
+                _ => None,
+            };
+            if let Some(reason) = reason {
+                log_login_failure(
+                    database,
+                    &headers,
+                    &email,
+                    Some(request.device_id),
+                    Some(user.id),
+                    Some(user.id),
+                    reason,
+                    "web_login",
+                    &request_id,
+                )
+                .await;
+            }
+            return Err(match error {
+                PersistenceError::NotFound => ApiError::authentication(request_id),
+                other => map_persistence(other, request_id),
+            });
+        }
+    };
     web_token_response(
         auth,
         &session.user,
@@ -1886,8 +2183,17 @@ pub async fn web_refresh(
         &request_id,
     )
     .await?;
-    let refresh_token = cookie_value(&headers, WEB_REFRESH_COOKIE)
-        .ok_or_else(|| ApiError::authentication(request_id.clone()))?;
+    let Some(refresh_token) = cookie_value(&headers, WEB_REFRESH_COOKIE) else {
+        log_refresh_failure(
+            database,
+            &headers,
+            "invalid_token",
+            "web_refresh",
+            &request_id,
+        )
+        .await;
+        return Err(ApiError::authentication(request_id));
+    };
     let opaque = auth
         .issue_refresh_token()
         .map_err(|_| ApiError::internal(request_id.clone()))?;
@@ -1896,7 +2202,7 @@ pub async fn web_refresh(
         family_id: Uuid::new_v4(),
         expires_at: refresh_expiry(auth.refresh_ttl_seconds()),
     };
-    let session = database
+    let session = match database
         .rotate_refresh_token_for_role(
             &opaque_token_hash(&refresh_token),
             &replacement,
@@ -1904,7 +2210,21 @@ pub async fn web_refresh(
             &request_id,
         )
         .await
-        .map_err(|error| map_persistence(error, request_id.clone()))?;
+    {
+        Ok(session) => session,
+        Err(error) => {
+            let reason = match &error {
+                PersistenceError::RefreshTokenReuse => None,
+                PersistenceError::AccountDisabled => Some("account_disabled"),
+                PersistenceError::DeviceRevoked => Some("device_revoked"),
+                _ => Some("invalid_token"),
+            };
+            if let Some(reason) = reason {
+                log_refresh_failure(database, &headers, reason, "web_refresh", &request_id).await;
+            }
+            return Err(map_persistence(error, request_id));
+        }
+    };
     web_token_response(
         auth,
         &session.user,
@@ -2688,13 +3008,14 @@ pub async fn admin_operations(
 pub async fn admin_audit_events(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<AdminPageQuery>,
+    Query(query): Query<AdminAuditQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let request_id = request_id(&headers);
     let (limit, offset) = admin_page_bounds(query.limit, query.offset, &request_id)?;
+    let action_filter = valid_audit_action_filter(query.action, &request_id)?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
     let (events, has_more) = database
-        .admin_list_audit_events_page(claims.sub, limit, offset)
+        .admin_list_audit_events_page_filtered(claims.sub, limit, offset, action_filter.as_deref())
         .await
         .map_err(|error| map_persistence(error, request_id))?;
     let next_offset = has_more.then_some(offset.saturating_add(limit));
@@ -2724,11 +3045,13 @@ pub async fn admin_trends(
 pub async fn admin_audit_events_csv(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AdminAuditQuery>,
 ) -> Result<Response, ApiError> {
     let request_id = request_id(&headers);
+    let action_filter = valid_audit_action_filter(query.action, &request_id)?;
     let (database, claims) = authenticate_admin(&state, &headers, &request_id).await?;
-    let events = database
-        .admin_list_audit_events(claims.sub)
+    let (events, _) = database
+        .admin_list_audit_events_page_filtered(claims.sub, 200, 0, action_filter.as_deref())
         .await
         .map_err(|error| map_persistence(error, request_id.clone()))?;
     let mut csv =
@@ -3007,6 +3330,74 @@ fn auth_rate_limit_key(headers: &HeaderMap, identity: &str) -> String {
     )
 }
 
+/// 失败审计的隐私哈希：邮箱与客户端 IP 均只存 hex SHA-256，不存明文。
+/// 与限流键的哈希方式一致，便于按哈希聚合定位撞库/喷洒，管理员可对已知
+/// 邮箱自行计算哈希做关联，网关日志可经 `request_id` 关联原文。
+fn auth_failure_hashes(headers: &HeaderMap, email_normalized: &str) -> (String, String) {
+    let email_hash = hex::encode(opaque_token_hash(email_normalized));
+    let client_hash = hex::encode(opaque_token_hash(&auth_client_key(headers)));
+    (email_hash, client_hash)
+}
+
+fn auth_client_hash(headers: &HeaderMap) -> String {
+    hex::encode(opaque_token_hash(&auth_client_key(headers)))
+}
+
+/// 尽力而为的登录失败审计：忽略写入错误，永不掩盖原始认证错误，
+/// 永不记录密码、令牌明文、邮箱/IP 明文。
+#[allow(clippy::too_many_arguments)]
+async fn log_login_failure(
+    database: &Persistence,
+    headers: &HeaderMap,
+    email_normalized: &str,
+    device_id: Option<Uuid>,
+    actor: Option<Uuid>,
+    subject: Option<Uuid>,
+    reason: &str,
+    source: &str,
+    request_id: &str,
+) {
+    let (email_hash, client_hash) = auth_failure_hashes(headers, email_normalized);
+    let _ = database
+        .record_auth_failure(
+            actor,
+            subject,
+            AUTH_LOGIN_FAILED_ACTION,
+            reason,
+            source,
+            Some(&email_hash),
+            device_id,
+            Some(&client_hash),
+            request_id,
+        )
+        .await;
+}
+
+/// 刷新失败审计（未知令牌场景，归因缺失时 actor/subject 为空）。
+/// token 重放已在 persistence 内同事务归因记录，调用方不再重复记录重放。
+async fn log_refresh_failure(
+    database: &Persistence,
+    headers: &HeaderMap,
+    reason: &str,
+    source: &str,
+    request_id: &str,
+) {
+    let client_hash = auth_client_hash(headers);
+    let _ = database
+        .record_auth_failure(
+            None,
+            None,
+            AUTH_REFRESH_FAILED_ACTION,
+            reason,
+            source,
+            None,
+            None,
+            Some(&client_hash),
+            request_id,
+        )
+        .await;
+}
+
 /// Per-client login budget on top of the per-account buckets.
 ///
 /// The per-account key alone lets an attacker rotate emails to dodge brute
@@ -3240,6 +3631,25 @@ fn admin_page_bounds(
         return Err(ApiError::invalid("分页 offset 无效", request_id.to_owned()));
     }
     Ok((limit, offset))
+}
+
+/// 审计动作过滤：空为全部；非空仅允许已知动作精确匹配，避免通配扫描与注入。
+fn valid_audit_action_filter(
+    action: Option<String>,
+    request_id: &str,
+) -> Result<Option<String>, ApiError> {
+    let Some(action) = action else {
+        return Ok(None);
+    };
+    let trimmed = action.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if ALLOWED_AUDIT_ACTIONS.contains(&trimmed) {
+        Ok(Some(trimmed.to_owned()))
+    } else {
+        Err(ApiError::invalid("审计动作过滤无效", request_id.to_owned()))
+    }
 }
 
 fn cursor_claims(

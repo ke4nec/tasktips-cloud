@@ -14,6 +14,12 @@ describe('auditActionKey', () => {
     expect(auditActionKey('user.created_by_admin')).toBe('user.createdByAdmin');
   });
 
+  it('maps authentication failure codes for attack investigation', () => {
+    expect(auditActionKey('auth.login_failed')).toBe('auth.loginFailed');
+    expect(auditActionKey('auth.refresh_failed')).toBe('auth.refreshFailed');
+    expect(auditActionKey('auth.reauth_failed')).toBe('auth.reauthFailed');
+  });
+
   it('leaves unknown codes unmapped so the raw code is displayed', () => {
     expect(auditActionKey('future.action')).toBeUndefined();
   });
@@ -45,6 +51,26 @@ describe('auditMetadataRows', () => {
     expect(auditMetadataRows({ enabled: false, generation: 3 })).toEqual([
       { label: 'metadata.enabled', value: 'false' },
       { label: 'metadata.generation', value: '3' },
+    ]);
+  });
+
+  it('renders failure hashes while dropping plaintext PII', () => {
+    expect(
+      auditMetadataRows({
+        reason: 'invalid_password',
+        source: 'login',
+        emailHash: 'a'.repeat(64),
+        clientHash: 'b'.repeat(64),
+        deviceId: 'd',
+        email: 'leak@example.test',
+        ip: '127.0.0.1',
+      }),
+    ).toEqual([
+      { label: 'metadata.reason', value: 'invalid_password' },
+      { label: 'metadata.source', value: 'login' },
+      { label: 'metadata.deviceId', value: 'd' },
+      { label: 'metadata.emailHash', value: 'a'.repeat(64) },
+      { label: 'metadata.clientHash', value: 'b'.repeat(64) },
     ]);
   });
 });

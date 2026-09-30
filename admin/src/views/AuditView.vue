@@ -24,8 +24,18 @@ const pageOffset = ref(0);
 const hasMore = ref(false);
 const pageSize = 100;
 const search = ref('');
+const actionFilter = ref('');
 const exporting = ref(false);
 let loadSequence = 0;
+
+const AUDIT_FILTER_OPTIONS = [
+  { value: '', labelKey: 'audit.filterAll' },
+  { value: 'auth.login_failed', labelKey: 'auditAction.auth.loginFailed' },
+  { value: 'auth.refresh_failed', labelKey: 'auditAction.auth.refreshFailed' },
+  { value: 'auth.reauth_failed', labelKey: 'auditAction.auth.reauthFailed' },
+  { value: 'auth.login', labelKey: 'auditAction.auth.login' },
+  { value: 'auth.refresh', labelKey: 'auditAction.auth.refresh' },
+];
 
 const filteredEvents = computed(() => {
   const query = search.value.trim().toLowerCase();
@@ -57,6 +67,7 @@ async function load(): Promise<void> {
     const response = await apiClient.getAdminAuditEvents({
       limit: pageSize,
       offset: pageOffset.value,
+      action: actionFilter.value || undefined,
     });
     if (sequence !== loadSequence) return;
     events.value = response.items;
@@ -81,12 +92,16 @@ function previousPage(): void {
   pageOffset.value = Math.max(0, pageOffset.value - pageSize);
   void load();
 }
+function onActionFilterChange(): void {
+  pageOffset.value = 0;
+  void load();
+}
 
 async function exportCsv(): Promise<void> {
   if (exporting.value) return;
   exporting.value = true;
   try {
-    const csv = await apiClient.exportAuditCsv();
+    const csv = await apiClient.exportAuditCsv(actionFilter.value || undefined);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -149,6 +164,22 @@ onBeforeUnmount(() => {
               :placeholder="t('search.audit')"
               :aria-label="t('search.audit')"
             />
+          </label>
+          <label class="filter-field">
+            <span class="sr-only">{{ t('audit.filterAction') }}</span>
+            <select
+              v-model="actionFilter"
+              :aria-label="t('audit.filterAction')"
+              @change="onActionFilterChange"
+            >
+              <option
+                v-for="option in AUDIT_FILTER_OPTIONS"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ t(option.labelKey) }}
+              </option>
+            </select>
           </label>
           <span class="toolbar-note">{{ t('common.pageFilter') }}</span>
         </div>

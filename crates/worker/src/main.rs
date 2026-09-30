@@ -71,6 +71,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(error) = persistence.prune_distributed_rate_limits(10_000).await {
                     warn!(error = %error, "distributed rate-limit cleanup failed");
                 }
+                // 失败审计保留 90 天：仅删三类失败动作，成功审计永久保留。
+                match persistence
+                    .prune_old_auth_failures(
+                        tasktips_persistence::AUTH_FAILURE_RETENTION_DAYS,
+                        1_000,
+                    )
+                    .await
+                {
+                    Ok(deleted) if deleted > 0 => {
+                        info!(deleted, "auth failure audit cleanup completed");
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        warn!(error = %error, "auth failure audit cleanup failed");
+                    }
+                }
             }
             signal = tokio::signal::ctrl_c() => {
                 signal?;

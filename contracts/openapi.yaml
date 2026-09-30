@@ -1491,12 +1491,14 @@ paths:
     get:
       operationId: adminAuditEvents
       summary: List audit metadata
+      description: Supports exact action filtering for attack investigation (auth.login_failed, auth.refresh_failed, auth.reauth_failed). Failure metadata only contains operational fields (reason, source, emailHash, deviceId, clientHash) and never passwords, tokens, or plaintext PII.
       tags: [Administration]
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/AuditAction'
       responses:
         '200':
           description: Audit events without payload data.
@@ -1515,6 +1517,8 @@ paths:
       tags: [Administration]
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AuditAction'
       responses:
         '200':
           description: Audit metadata CSV without payload content.
@@ -1908,6 +1912,25 @@ components:
         minimum: 0
         maximum: 1000000
         default: 0
+    AuditAction:
+      name: action
+      in: query
+      required: false
+      description: Exact audit action filter for attack investigation.
+      schema:
+        type: string
+        enum:
+          - auth.login_failed
+          - auth.refresh_failed
+          - auth.reauth_failed
+          - auth.login
+          - auth.refresh
+          - auth.logout
+          - auth.web.logout
+          - auth.registered
+          - auth.invitation_activated
+          - account.status_changed
+          - device.revoked
   schemas:
     HealthResponse:
       type: object
@@ -3108,8 +3131,10 @@ components:
           format: uuid
         action:
           type: string
+          description: Success actions (auth.login, auth.refresh) and failure actions (auth.login_failed, auth.refresh_failed, auth.reauth_failed) for attack detection. Failure metadata only carries reason, source, emailHash, deviceId, clientHash.
         metadata:
           type: object
+          description: Operational metadata only. Failure events carry reason/source/emailHash/deviceId/clientHash; never passwords, tokens, payloads, or plaintext PII.
         requestId:
           type: [string, 'null']
         createdAt:

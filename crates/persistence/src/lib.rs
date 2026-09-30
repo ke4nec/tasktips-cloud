@@ -23,6 +23,15 @@ const REFRESH_ROTATION_GRACE_SECONDS: i64 = 30;
 /// 补发并按泄露处置，防止宽限窗口内无限铸造。
 const REFRESH_FAMILY_ACTIVE_LIMIT: i64 = 4;
 
+/// 异常登录/访问审计动作：仅记录认证失败，不记录通用 401/403（避免洪水）。
+/// 成功审计沿用 `auth.login` / `auth.refresh`；失败统一落这三类，便于告警。
+pub const AUTH_LOGIN_FAILED_ACTION: &str = "auth.login_failed";
+pub const AUTH_REFRESH_FAILED_ACTION: &str = "auth.refresh_failed";
+pub const AUTH_REAUTH_FAILED_ACTION: &str = "auth.reauth_failed";
+
+/// 失败审计保留天数：worker 仅清理超过该期限的三类失败动作，成功审计永久保留。
+pub const AUTH_FAILURE_RETENTION_DAYS: i64 = 90;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
     #[error("database operation failed")]
@@ -1330,6 +1339,7 @@ impl Persistence {
         .await
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn rotate_refresh_token_inner(
         &self,
         old_token_hash: &[u8],
@@ -1392,6 +1402,22 @@ impl Persistence {
                 .bind(token.family_id)
                 .execute(&mut *tx)
                 .await?;
+                // 令牌重放是最高优先级的被攻击信号：同事务内以可归因身份
+                // （actor=subject=token.owner）写入失败审计，再提交吊销。
+                // 写入失败不得掩盖吊销本身，忽略审计错误。
+                let _ = insert_audit_nullable(
+                    &mut tx,
+                    Some(token.user_id),
+                    Some(token.user_id),
+                    AUTH_REFRESH_FAILED_ACTION,
+                    json!({
+                        "reason": "token_reuse",
+                        "source": expected_role.unwrap_or("refresh"),
+                        "deviceId": token.device_id,
+                    }),
+                    request_id,
+                )
+                .await;
                 tx.commit().await?;
                 return Err(PersistenceError::RefreshTokenReuse);
             }
@@ -5173,14 +5199,33 @@ impl Persistence {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<AuditEventRecord>, bool), PersistenceError> {
+        self.admin_list_audit_events_page_filtered(actor_user_id, limit, offset, None)
+            .await
+    }
+
+    /// Lists one page of audit metadata with an optional exact `action` filter.
+    ///
+    /// `action_filter` 为空时返回全部；非空时仅返回该动作，用于快速定位
+    /// `auth.login_failed` / `auth.refresh_failed` / `auth.reauth_failed` 等被攻击信号。
+    /// 过滤值为精确匹配，不支持通配，避免全表扫描与注入。
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn admin_list_audit_events_page_filtered(
+        &self,
+        actor_user_id: Uuid,
+        limit: i64,
+        offset: i64,
+        action_filter: Option<&str>,
+    ) -> Result<(Vec<AuditEventRecord>, bool), PersistenceError> {
         self.verify_admin(actor_user_id).await?;
         let mut tx = self.begin_admin().await?;
         let mut events = sqlx::query_as::<_, AuditEventRecord>(
             "SELECT id, actor_user_id, subject_user_id, project_id, action, metadata, request_id, created_at \
-             FROM audit_events ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
+             FROM audit_events WHERE ($3::text IS NULL OR action = $3) \
+             ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
         )
         .bind(limit.saturating_add(1))
         .bind(offset.max(0))
+        .bind(action_filter)
         .fetch_all(&mut *tx)
         .await?;
         let has_more = i64::try_from(events.len()).unwrap_or(i64::MAX) > limit;
@@ -5189,6 +5234,109 @@ impl Persistence {
         }
         tx.commit().await?;
         Ok((events, has_more))
+    }
+
+    /// Records an authentication failure for attack detection.
+    ///
+    /// 使用 `tasktips_auth` 身份独立事务写入，允许 `actor` / `subject` 为空
+    /// （未知账号、未知令牌场景）。元数据仅存操作性字段，永不存密码、
+    /// 令牌明文、邮箱明文、IP 明文：调用方须预先哈希（`emailHash` /
+    /// `clientHash` 为 hex SHA-256，`deviceId` 为 UUID）。
+    /// 写入为尽力而为：调用方（API 路由）应忽略错误，避免审计失败掩盖原错误。
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the audit insert cannot be persisted.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_auth_failure(
+        &self,
+        actor_user_id: Option<Uuid>,
+        subject_user_id: Option<Uuid>,
+        action: &str,
+        reason: &str,
+        source: &str,
+        email_hash: Option<&str>,
+        device_id: Option<Uuid>,
+        client_hash: Option<&str>,
+        request_id: &str,
+    ) -> Result<(), PersistenceError> {
+        debug_assert!(matches!(
+            action,
+            AUTH_LOGIN_FAILED_ACTION | AUTH_REFRESH_FAILED_ACTION | AUTH_REAUTH_FAILED_ACTION
+        ));
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "reason".to_owned(),
+            serde_json::Value::String(reason.to_owned()),
+        );
+        metadata.insert(
+            "source".to_owned(),
+            serde_json::Value::String(source.to_owned()),
+        );
+        if let Some(hash) = email_hash {
+            metadata.insert(
+                "emailHash".to_owned(),
+                serde_json::Value::String(hash.to_owned()),
+            );
+        }
+        if let Some(device) = device_id {
+            metadata.insert(
+                "deviceId".to_owned(),
+                serde_json::Value::String(device.to_string()),
+            );
+        }
+        if let Some(client) = client_hash {
+            metadata.insert(
+                "clientHash".to_owned(),
+                serde_json::Value::String(client.to_owned()),
+            );
+        }
+        let mut tx = self.begin_auth().await?;
+        sqlx::query(
+            "INSERT INTO audit_events \
+             (actor_user_id, subject_user_id, action, metadata, request_id) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(actor_user_id)
+        .bind(subject_user_id)
+        .bind(action)
+        .bind(serde_json::Value::Object(metadata))
+        .bind(request_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Deletes expired authentication-failure audit rows.
+    ///
+    /// 仅删除三类失败动作且超过保留期（`AUTH_FAILURE_RETENTION_DAYS`）的行，
+    /// 成功审计永久保留。依赖迁移 0003 的 `audit_events_worker_delete` 策略。
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the cleanup query cannot complete.
+    pub async fn prune_old_auth_failures(
+        &self,
+        retention_days: i64,
+        limit: i64,
+    ) -> Result<u64, PersistenceError> {
+        let mut tx = self.begin_worker().await?;
+        let deleted = sqlx::query(
+            "WITH expired AS ( \
+                 SELECT id FROM audit_events \
+                 WHERE action IN ('auth.login_failed', 'auth.refresh_failed', 'auth.reauth_failed') \
+                   AND created_at < CURRENT_TIMESTAMP - ($1::bigint * INTERVAL '1 day') \
+                 ORDER BY created_at LIMIT $2 \
+             ) DELETE FROM audit_events e USING expired WHERE e.id = expired.id",
+        )
+        .bind(retention_days.max(1))
+        .bind(limit.max(1))
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(deleted)
     }
 
     /// Returns daily synchronization outcome and latency trends without payload data.
@@ -5859,6 +6007,25 @@ async fn insert_refresh(
 async fn insert_audit(
     tx: &mut Transaction<'_, Postgres>,
     actor_user_id: Uuid,
+    subject_user_id: Option<Uuid>,
+    action: &str,
+    metadata: serde_json::Value,
+    request_id: &str,
+) -> Result<(), PersistenceError> {
+    insert_audit_nullable(
+        tx,
+        Some(actor_user_id),
+        subject_user_id,
+        action,
+        metadata,
+        request_id,
+    )
+    .await
+}
+
+async fn insert_audit_nullable(
+    tx: &mut Transaction<'_, Postgres>,
+    actor_user_id: Option<Uuid>,
     subject_user_id: Option<Uuid>,
     action: &str,
     metadata: serde_json::Value,
